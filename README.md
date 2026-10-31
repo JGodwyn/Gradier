@@ -169,9 +169,12 @@ npx gradier skill --print    # or print it to paste elsewhere
 | Expand a point's area | Select the point, then drag the curved grip on its dashed circle |
 | Stretch a point's colour | Select a point and drag its four arms; a longer arm pushes the colour further that way |
 | Draw a line / arc | **Line** (<kbd>L</kbd>) or **Arc** (<kbd>A</kbd>) tool, then drag across the gradient. Drag the ends to reshape; drag an arc's colour point to bend it |
-| Freehand | **Pencil** (<kbd>P</kbd>): your stroke is fitted to a line or an arc |
+| Freehand | **Pencil** (<kbd>P</kbd>): the colour follows your stroke. Drag the middle handle to move it, drag an end to bend it, and drag an end's grip to make the colour wider or narrower there |
 | Shuffle / scatter | <kbd>X</kbd> shuffles colours, <kbd>R</kbd> scatters points |
 | Hide handles | <kbd>H</kbd> or the eye button |
+| Grain | **Mono**, **Duo** (warm/cool) or **Multi** (per-channel) grain, with opacity, grain size and density |
+| Filters | Hue, saturation, brightness and temperature, with a reset button |
+| Export | Pick 1×–4× of the element's size, then **JPG**, **PNG** or **Copy** (PNG to the clipboard) |
 | Back to Select | <kbd>V</kbd> or <kbd>Esc</kbd> |
 | Remove a point | Select it and press <kbd>Delete</kbd>, or use the bin icon |
 | Undo / redo | <kbd>⌘/Ctrl</kbd>+<kbd>Z</kbd> / <kbd>⌘/Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> |
@@ -202,7 +205,9 @@ Saving writes only the gradients file. Vite's HMR is told to skip that file, so 
 
 - `radius`: how far the colour reaches, as a multiple of the default (`1`).
 - `arms`: four `[dx, dy]` direction handles (in units of √(width × height)) that stretch the colour's reach.
-- `shape`: `{ "type": "line" | "arc", "a": {x, y}, "b": {x, y} }` makes the colour follow a segment from `a` to `b`, or an arc from `a` through the point to `b`.
+- `shape`: `{ "type": "line" | "arc", "a": {x, y}, "b": {x, y} }` makes the colour follow a segment from `a` to `b`, or an arc from `a` through the point to `b`. `{ "type": "path", "points": [{x, y}, …] }` follows a freehand stroke. Optional `ra` / `rb` set the colour's width at the start / end.
+
+Gradients can also carry optional look settings, left out when unchanged: `grainType` (`"mono"`, `"duo"`, `"multi"`), `grainSize` (1–4), `grainDensity` (0–2), `hue` (−180–180), `saturation` (0–2), `brightness` (0–2) and `temperature` (−1–1).
 
  Colours blend in OKLab, which keeps transitions vivid instead of muddy. Everything except the points is a 0–1 value. `speed > 0` animates the gradient, and animation pauses when the gradient is off-screen or the user prefers reduced motion.
 

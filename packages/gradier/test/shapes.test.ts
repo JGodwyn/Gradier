@@ -72,3 +72,46 @@ test('translatePoint moves the curve with the point', () => {
   close(p.shape!.a.x, 0.4);
   close(p.shape!.b.y, 0.3);
 });
+
+test('freehand paths: smoothing keeps the ends, bending fades out along the stroke', async () => {
+  const { samplePath, bendPath, simplifyStroke } = await import('../src/core/geometry');
+  const pts = [{ x: 0, y: 0 }, { x: 10, y: 5 }, { x: 20, y: 0 }, { x: 30, y: 5 }];
+  const smooth = samplePath(pts, 32);
+  assert.equal(smooth.length, 32);
+  close(smooth[0]!.x, 0);
+  close(smooth[31]!.x, 30);
+  close(smooth[31]!.y, 5);
+  const bent = bendPath(pts, 'b', 0, 10);
+  close(bent[3]!.y, 15); // the dragged end moves fully
+  close(bent[0]!.y, 0); // the far end stays put
+  assert.ok(bent[2]!.y > 0 && bent[2]!.y < 10);
+  const raw = Array.from({ length: 200 }, (_, i) => ({ x: i * 0.5, y: 0 }));
+  const simple = simplifyStroke(raw, 6, 64);
+  assert.ok(simple.length < 30);
+  assert.deepEqual(simple[0], raw[0]);
+  assert.deepEqual(simple.at(-1), raw.at(-1));
+});
+
+test('normalizeGradient keeps path shapes and end widths, and only non-default look settings', () => {
+  const g = normalizeGradient({
+    points: [
+      { x: 0.5, y: 0.5, color: '#fff', shape: { type: 'path', points: [{ x: 0.1, y: 0.1 }, { x: 0.5, y: 0.6 }, { x: 0.9, y: 0.2 }], ra: 2, rb: 1 } },
+      { x: 0.5, y: 0.5, color: '#000', shape: { type: 'path', points: [{ x: 0.1, y: 0.1 }] } },
+    ],
+    grainType: 'multi',
+    grainSize: 1,
+    hue: 400,
+    saturation: 1.5,
+  });
+  const path = g.points[0]!.shape!;
+  assert.equal(path.type, 'path');
+  assert.equal(path.type === 'path' && path.points.length, 3);
+  assert.equal(path.ra, 2);
+  assert.equal(path.rb, undefined);
+  assert.equal(g.points[1]!.shape, undefined); // a 1-point path is dropped
+  assert.equal(g.grainType, 'multi');
+  assert.equal(g.grainSize, undefined);
+  assert.equal(g.hue, 180);
+  assert.equal(g.saturation, 1.5);
+  assert.equal(g.brightness, undefined);
+});

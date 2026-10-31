@@ -1,3 +1,4 @@
+import { filteredHex } from './color';
 import { hexToRgb, rgbToHex, type Gradient } from './types';
 
 /**
@@ -6,9 +7,10 @@ import { hexToRgb, rgbToHex, type Gradient } from './types';
  */
 export function gradientToCSS(g: Gradient): string {
   if (!g.points.length) return 'transparent';
-  const avg = g.points.reduce<[number, number, number]>(
-    (acc, p) => {
-      const [r, gg, b] = hexToRgb(p.color);
+  const colors = g.points.map((p) => filteredHex(p.color, g));
+  const avg = colors.reduce<[number, number, number]>(
+    (acc, color) => {
+      const [r, gg, b] = hexToRgb(color);
       return [acc[0] + r, acc[1] + gg, acc[2] + b];
     },
     [0, 0, 0],
@@ -17,8 +19,8 @@ export function gradientToCSS(g: Gradient): string {
   const base = rgbToHex(avg[0] / n, avg[1] / n, avg[2] / n);
   const reach = 70 - g.softness * 35;
   const layers = g.points.map(
-    (p) =>
-      `radial-gradient(at ${pct(p.x)} ${pct(p.y)}, ${p.color} 0px, transparent ${Math.round(Math.min(reach * (p.radius ?? 1), 150))}%)`,
+    (p, i) =>
+      `radial-gradient(at ${pct(p.x)} ${pct(p.y)}, ${colors[i]} 0px, transparent ${Math.round(Math.min(reach * (p.radius ?? 1), 150))}%)`,
   );
   return `${layers.join(', ')}, ${base}`;
 }
