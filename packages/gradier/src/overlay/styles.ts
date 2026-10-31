@@ -154,4 +154,18 @@ kbd { font: 10px ui-monospace, monospace; padding: 1px 4px; border-radius: 4px; 
   background: rgba(255,255,255,.1); color: #d4d4d8; font-size: 10px; }
 .tool:hover .tip { opacity: 1; transform: translate(-50%, 0); transition-delay: .25s; }
 .canvas { position: fixed; pointer-events: auto; cursor: crosshair; touch-action: none; }
+
+.guides { position: fixed; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.guides .curve { fill: none; stroke: #fff; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 1px rgba(0,0,0,.35)); }
+.guides .curve.preview { stroke-opacity: .85; }
+.guides .area { fill: none; stroke: rgba(255,255,255,.75); stroke-width: 1; stroke-dasharray: 2 3; }
+.guides .arm { stroke: #fff; stroke-width: 1.5; stroke-linecap: round; filter: drop-shadow(0 0 1px rgba(0,0,0,.35)); }
+.guides .grip { fill: none; stroke: #fff; stroke-width: 2.5; stroke-linecap: round; opacity: .9; filter: drop-shadow(0 0 1px rgba(0,0,0,.35)); }
+.guides .grip.on { stroke-width: 3.5; opacity: 1; }
+.guides .grip-hit { fill: none; stroke: transparent; stroke-width: 18; stroke-linecap: round; pointer-events: stroke; cursor: nwse-resize; touch-action: none; }
+.knob { position: fixed; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: #fff; pointer-events: auto; cursor: grab; touch-action: none;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.25), 0 2px 6px rgba(0,0,0,.35); transition: transform .08s; }
+.knob::before { content: ''; position: absolute; inset: -6px; border-radius: 50%; }
+.knob:hover { transform: scale(1.3); }
+.knob.dragging { cursor: grabbing; transform: scale(1.4); }
 `;

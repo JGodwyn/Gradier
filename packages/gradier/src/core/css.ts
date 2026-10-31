@@ -15,9 +15,10 @@ export function gradientToCSS(g: Gradient): string {
   );
   const n = g.points.length;
   const base = rgbToHex(avg[0] / n, avg[1] / n, avg[2] / n);
-  const reach = Math.round(70 - g.softness * 35);
+  const reach = 70 - g.softness * 35;
   const layers = g.points.map(
-    (p) => `radial-gradient(at ${pct(p.x)} ${pct(p.y)}, ${p.color} 0px, transparent ${reach}%)`,
+    (p) =>
+      `radial-gradient(at ${pct(p.x)} ${pct(p.y)}, ${p.color} 0px, transparent ${Math.round(Math.min(reach * (p.radius ?? 1), 150))}%)`,
   );
   return `${layers.join(', ')}, ${base}`;
 }

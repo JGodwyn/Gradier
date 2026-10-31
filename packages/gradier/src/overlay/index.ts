@@ -1,13 +1,30 @@
 import { gradientToCSS } from '../core/css';
 import { defineGradientElement } from '../core/element';
 import { getGradient, getGradients, mountedElements, registerGradients, removeGradient, setGradient, subscribe } from '../core/store';
-import { isValidName, MAX_POINTS, normalizeGradient, normalizeHex, PRESETS, randomGradient, type Gradient } from '../core/types';
+import { arcSamples, defaultBulge, distToLine } from '../core/geometry';
+import {
+  AREA_RADIUS,
+  defaultArms,
+  isValidName,
+  MAX_POINTS,
+  MAX_RADIUS,
+  MIN_RADIUS,
+  normalizeGradient,
+  normalizeHex,
+  PRESETS,
+  randomGradient,
+  rgbToHex,
+  translatePoint,
+  type Gradient,
+  type GradientPoint,
+  type PointShape,
+} from '../core/types';
 import { createCssEditor } from './css-editor';
 import { h } from './dom';
 import { ICONS } from './icons';
 import { startPicker } from './picker';
 import { STYLES } from './styles';
-import { createToolbar, TOOLS, ACTION_KEYS, type Tool } from './toolbar';
+import { ACTION_KEYS, createToolbar, TOOLS, type Tool } from './toolbar';
 
 declare global {
   interface Window {
@@ -317,7 +334,7 @@ function boot() {
     render();
   };
 
-  const addPoint = (x?: number, y?: number) => {
+  const addPoint = (x?: number, y?: number, color?: string, shape?: PointShape) => {
     update((g) => {
       if (g.points.length >= MAX_POINTS) {
         toast(`Max ${MAX_POINTS} points`, true);
@@ -327,7 +344,8 @@ function boot() {
       g.points.push({
         x: x ?? 0.2 + Math.random() * 0.6,
         y: y ?? 0.2 + Math.random() * 0.6,
-        color: near?.color ?? '#ffffff',
+        color: color ?? near?.color ?? '#ffffff',
+        ...(shape ? { shape } : {}),
       });
       state.point = g.points.length - 1;
     });
@@ -354,10 +372,7 @@ function boot() {
 
   const scatterPoints = () =>
     update((d) => {
-      d.points.forEach((p) => {
-        p.x = Math.round((0.08 + Math.random() * 0.84) * 1000) / 1000;
-        p.y = Math.round((0.08 + Math.random() * 0.84) * 1000) / 1000;
-      });
+      d.points.forEach((p) => translatePoint(p, 0.08 + Math.random() * 0.84 - p.x, 0.08 + Math.random() * 0.84 - p.y));
     });
 
   const setTool = (tool: Tool) => {
@@ -653,7 +668,7 @@ function boot() {
       toolbar.el.remove();
       stage.replaceChildren();
       overlays.clear();
-      handles.length = 0;
+      clearHandles();
       return;
     }
     launcher?.remove();
@@ -698,9 +713,187 @@ function boot() {
 
   // ---------- on-page handles ----------
   type Overlay = { frame: HTMLElement; chip: HTMLButtonElement };
+  type Rel = { x: number; y: number };
   const overlays = new Map<HTMLElement, Overlay>();
-  const handles: HTMLElement[] = [];
-  let drag: { index: number; el: HTMLElement } | null = null;
+  let dragKey: string | null = null;
+  let drawing: { tool: Tool; samples: Rel[] } | null = null;
+
+  /** Keyed element pool so handles survive across frames (keeps pointer capture and listeners intact). */
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('class', 'guides');
+  const pool = new Map<string, Element>();
+  let used = new Set<string>();
+  const get = <T extends Element>(key: string, make: () => T, parent: Element): T => {
+    used.add(key);
+    let el = pool.get(key);
+    if (!el) {
+      el = make();
+      pool.set(key, el);
+    }
+    if (el.parentNode !== parent) parent.append(el);
+    return el as T;
+  };
+  const svgEl = (key: string, tag: string, cls: string) =>
+    get(key, () => {
+      const el = document.createElementNS(SVG_NS, tag);
+      el.setAttribute('class', cls);
+      return el;
+    }, svg);
+  const sweepPool = () => {
+    for (const [key, el] of pool) if (!used.has(key)) el.remove(), pool.delete(key);
+    used = new Set();
+  };
+  const clearHandles = () => {
+    used = new Set();
+    sweepPool();
+    svg.remove();
+    canvas.remove();
+  };
+
+  const relFromEvent = (ev: PointerEvent, el: HTMLElement, snap = ev.shiftKey): Rel => {
+    const r = el.getBoundingClientRect();
+    let x = clamp((ev.clientX - r.left) / r.width, -0.25, 1.25);
+    let y = clamp((ev.clientY - r.top) / r.height, -0.25, 1.25);
+    if (snap) {
+      x = Math.round(x * 20) / 20;
+      y = Math.round(y * 20) / 20;
+    }
+    return { x, y };
+  };
+
+  /** Generic drag: calls `onMove` with the pointer position relative to the selected element. */
+  const startDrag = (e: PointerEvent, key: string, index: number, onMove: (rel: Rel, ev: PointerEvent) => void) => {
+    const el = state.target;
+    if (!el || e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragKey = key;
+    if (state.point !== index) {
+      state.point = index;
+      render();
+    }
+    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+    const move = (ev: PointerEvent) => onMove(relFromEvent(ev, el), ev);
+    const up = () => {
+      dragKey = null;
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+  };
+
+  const editPoint = (index: number, key: string, mutate: (p: GradientPoint, el: HTMLElement) => void) =>
+    update((d) => {
+      const p = d.points[index];
+      if (p && state.target) mutate(p, state.target);
+    }, `${key}-${index}`);
+
+  /** Pixel size of one arm/radius unit (√(w×h)) for the element. */
+  const unitOf = (el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    return { r, unit: Math.sqrt(Math.max(r.width * r.height, 1)) };
+  };
+
+  const onColorHandle = (e: PointerEvent, i: number) =>
+    startDrag(e, `h:${i}`, i, (rel) =>
+      editPoint(i, 'move', (p) => {
+        if (p.shape?.type === 'line') translatePoint(p, rel.x - p.x, rel.y - p.y);
+        else {
+          p.x = rel.x;
+          p.y = rel.y;
+        }
+      }),
+    );
+
+  const onEndpoint = (e: PointerEvent, i: number, end: 'a' | 'b') =>
+    startDrag(e, `ep:${i}:${end}`, i, (rel) =>
+      editPoint(i, `end-${end}`, (p) => {
+        if (!p.shape) return;
+        p.shape[end] = rel;
+        if (p.shape.type === 'line') {
+          p.x = (p.shape.a.x + p.shape.b.x) / 2;
+          p.y = (p.shape.a.y + p.shape.b.y) / 2;
+        }
+      }),
+    );
+
+  const onArm = (e: PointerEvent, i: number, k: number) =>
+    startDrag(e, `arm:${i}:${k}`, i, (rel) =>
+      editPoint(i, `arm-${k}`, (p, el) => {
+        const { r, unit } = unitOf(el);
+        const arms = p.arms ?? defaultArms();
+        arms[k] = [((rel.x - p.x) * r.width) / unit, ((rel.y - p.y) * r.height) / unit];
+        p.arms = arms;
+      }),
+    );
+
+  const onGrip = (e: PointerEvent, i: number) =>
+    startDrag(e, `grip:${i}`, i, (rel) =>
+      editPoint(i, 'radius', (p, el) => {
+        const { r, unit } = unitOf(el);
+        const dist = Math.hypot((rel.x - p.x) * r.width, (rel.y - p.y) * r.height);
+        p.radius = clamp(dist / (AREA_RADIUS * unit), MIN_RADIUS, MAX_RADIUS);
+      }),
+    );
+
+  /** Read the rendered colour under a point of a gradient element (averaged over a few pixels). */
+  const sampler = document.createElement('canvas');
+  sampler.width = sampler.height = 1;
+  const sampleColor = (el: HTMLElement, rel: Rel): string | null => {
+    const src = el.shadowRoot?.querySelector('canvas');
+    const ctx = sampler.getContext('2d', { willReadFrequently: true });
+    if (!src || !ctx || !src.width || !src.height) return null;
+    try {
+      const sx = clamp(rel.x, 0, 1) * src.width;
+      const sy = clamp(rel.y, 0, 1) * src.height;
+      ctx.clearRect(0, 0, 1, 1);
+      ctx.drawImage(src, clamp(sx - 3, 0, src.width - 6), clamp(sy - 3, 0, src.height - 6), 6, 6, 0, 0, 1, 1);
+      const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+      return a ? rgbToHex(r!, g!, b!) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  /** Turn a finished drag with the Line / Arc / Pencil tool into a shaped point. */
+  const finishDrawing = (tool: Tool, samples: Rel[]) => {
+    const el = state.target;
+    if (!el || samples.length < 2) return;
+    const { r } = unitOf(el);
+    const px = (p: Rel) => ({ x: p.x * r.width, y: p.y * r.height });
+    const rel = (p: { x: number; y: number }) => ({ x: p.x / r.width, y: p.y / r.height });
+    const a = samples[0]!;
+    const b = samples[samples.length - 1]!;
+    const chord = Math.hypot(px(b).x - px(a).x, px(b).y - px(a).y);
+    if (chord < 8) {
+      if (tool === 'pencil') toast('Draw an open stroke: it becomes a line or an arc');
+      return;
+    }
+    let shape: PointShape;
+    let mid: Rel;
+    if (tool === 'line') {
+      shape = { type: 'line', a, b };
+      mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    } else if (tool === 'arc') {
+      shape = { type: 'arc', a, b };
+      mid = rel(defaultBulge(px(a), px(b)));
+    } else {
+      // Pencil: fit the freehand stroke with the arc through its start, halfway point and end.
+      const pts = samples.map(px);
+      const lengths = [0];
+      for (let k = 1; k < pts.length; k++) lengths.push(lengths[k - 1]! + Math.hypot(pts[k]!.x - pts[k - 1]!.x, pts[k]!.y - pts[k - 1]!.y));
+      const half = lengths[lengths.length - 1]! / 2;
+      const m = pts[Math.max(0, lengths.findIndex((l) => l >= half))]!;
+      const straight = distToLine(m, pts[0]!, pts[pts.length - 1]!) < chord * 0.06;
+      shape = { type: straight ? 'line' : 'arc', a, b };
+      mid = straight ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : rel(m);
+    }
+    addPoint(mid.x, mid.y, sampleColor(el, mid) ?? undefined, shape);
+  };
 
   /** Transparent layer over the selected gradient that receives clicks while a drawing tool is active. */
   const canvas = h('div', { className: 'canvas' });
@@ -708,20 +901,136 @@ function boot() {
     const el = state.target;
     if (!el || e.button !== 0) return;
     e.preventDefault();
-    const r = el.getBoundingClientRect();
-    const x = clamp((e.clientX - r.left) / r.width, 0, 1);
-    const y = clamp((e.clientY - r.top) / r.height, 0, 1);
-    if (state.tool === 'node') addPoint(x, y);
-    else toast(`${TOOLS.find((t) => t.id === state.tool)?.label} tool is coming soon`);
+    const start = relFromEvent(e, el, false);
+    if (state.tool === 'node') {
+      addPoint(clamp(start.x, 0, 1), clamp(start.y, 0, 1), sampleColor(el, start) ?? undefined);
+      return;
+    }
+    if (state.tool === 'select') return;
+    canvas.setPointerCapture(e.pointerId);
+    drawing = { tool: state.tool, samples: [start] };
+    const move = (ev: PointerEvent) => {
+      if (!drawing) return;
+      const p = relFromEvent(ev, el, ev.shiftKey && drawing.tool !== 'pencil');
+      if (drawing.tool === 'pencil') drawing.samples.push(p);
+      else drawing.samples = [drawing.samples[0]!, p];
+    };
+    const up = () => {
+      const done = drawing;
+      drawing = null;
+      canvas.removeEventListener('pointermove', move);
+      canvas.removeEventListener('pointerup', up);
+      canvas.removeEventListener('pointercancel', cancel);
+      if (done) finishDrawing(done.tool, done.samples);
+    };
+    const cancel = () => {
+      drawing = null;
+      canvas.removeEventListener('pointermove', move);
+      canvas.removeEventListener('pointerup', up);
+      canvas.removeEventListener('pointercancel', cancel);
+    };
+    canvas.addEventListener('pointermove', move);
+    canvas.addEventListener('pointerup', up);
+    canvas.addEventListener('pointercancel', cancel);
   });
+
+  const polyline = (pts: Array<{ x: number; y: number }>) => pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+
+  const knob = (key: string, cls: string, x: number, y: number, onDown: (e: PointerEvent) => void, title: string) => {
+    const el = get(key, () => {
+      const k = h('div', { className: cls, title });
+      k.addEventListener('pointerdown', onDown);
+      return k;
+    }, stage);
+    el.classList.toggle('dragging', dragKey === key);
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    return el;
+  };
+
+  /** Draw handles, curves, the area circle and arms for the selected gradient. */
+  const drawHandles = (g: Gradient, r: DOMRect) => {
+    if (!svg.isConnected) stage.prepend(svg);
+    const unit = Math.sqrt(Math.max(r.width * r.height, 1));
+    const toPx = (p: Rel) => ({ x: r.left + p.x * r.width, y: r.top + p.y * r.height });
+
+    if (!state.handlesHidden) {
+      const sel = state.point !== null ? g.points[state.point] : undefined;
+      const i = state.point!;
+      if (sel) {
+        const c = toPx(sel);
+        // Curve the colour follows.
+        if (sel.shape) {
+          const a = toPx(sel.shape.a);
+          const b = toPx(sel.shape.b);
+          const pts = sel.shape.type === 'arc' ? arcSamples(a, c, b) : [a, b];
+          svgEl(`curve:${i}`, 'polyline', 'curve').setAttribute('points', polyline(pts));
+        }
+        // Area circle + resize grip.
+        const R = AREA_RADIUS * (sel.radius ?? 1) * unit;
+        const area = svgEl(`area:${i}`, 'circle', 'area');
+        area.setAttribute('cx', `${c.x}`);
+        area.setAttribute('cy', `${c.y}`);
+        area.setAttribute('r', `${R}`);
+        const gr = R + 5;
+        const a0 = (15 * Math.PI) / 180;
+        const a1 = (65 * Math.PI) / 180;
+        const d = `M ${c.x + gr * Math.cos(a0)} ${c.y + gr * Math.sin(a0)} A ${gr} ${gr} 0 0 1 ${c.x + gr * Math.cos(a1)} ${c.y + gr * Math.sin(a1)}`;
+        svgEl(`grip:${i}`, 'path', `grip${dragKey === `grip:${i}` ? ' on' : ''}`).setAttribute('d', d);
+        const hit = get(`griphit:${i}`, () => {
+          const el = document.createElementNS(SVG_NS, 'path');
+          el.setAttribute('class', 'grip-hit');
+          el.appendChild(document.createElementNS(SVG_NS, 'title')).textContent = 'Drag to expand or shrink the area';
+          el.addEventListener('pointerdown', (e) => onGrip(e as PointerEvent, i));
+          return el;
+        }, svg);
+        hit.setAttribute('d', d);
+        // Direction arms (plain points only).
+        if (!sel.shape) {
+          (sel.arms ?? defaultArms()).forEach(([dx, dy], k) => {
+            const end = { x: c.x + dx * unit, y: c.y + dy * unit };
+            const line = svgEl(`armline:${i}:${k}`, 'line', 'arm');
+            line.setAttribute('x1', `${c.x}`);
+            line.setAttribute('y1', `${c.y}`);
+            line.setAttribute('x2', `${end.x}`);
+            line.setAttribute('y2', `${end.y}`);
+            knob(`arm:${i}:${k}`, 'knob', end.x, end.y, (e) => onArm(e, i, k), 'Drag to stretch the colour this way');
+          });
+        } else {
+          const a = toPx(sel.shape.a);
+          const b = toPx(sel.shape.b);
+          knob(`ep:${i}:a`, 'knob end', a.x, a.y, (e) => onEndpoint(e, i, 'a'), 'Drag to move this end');
+          knob(`ep:${i}:b`, 'knob end', b.x, b.y, (e) => onEndpoint(e, i, 'b'), 'Drag to move this end');
+        }
+      }
+      g.points.forEach((p, k) => {
+        const c = toPx(p);
+        const el = knob(`h:${k}`, 'handle', c.x, c.y, (e) => onColorHandle(e, k), '');
+        el.className = `handle${state.point === k ? ' active' : ''}${dragKey === `h:${k}` ? ' dragging' : ''}`;
+        el.style.background = p.color;
+        el.title =
+          p.shape?.type === 'arc'
+            ? `${p.color} · drag to bend the arc, Delete to remove`
+            : `${p.color} · drag to move, Delete to remove`;
+      });
+    }
+
+    // Live preview while drawing a line, arc or pencil stroke.
+    if (drawing && drawing.samples.length > 1) {
+      const pts = drawing.samples.map(toPx);
+      const a = pts[0]!;
+      const b = pts[pts.length - 1]!;
+      const shown = drawing.tool === 'arc' ? arcSamples(a, defaultBulge(a, b), b) : drawing.tool === 'line' ? [a, b] : pts;
+      svgEl('preview', 'polyline', 'curve preview').setAttribute('points', polyline(shown));
+    }
+  };
 
   const positionStage = () => {
     if (!state.open) return;
     if (state.mode === 'css') {
       for (const o of overlays.values()) o.frame.remove(), o.chip.remove();
       overlays.clear();
-      while (handles.length) handles.pop()!.remove();
-      canvas.remove();
+      clearHandles();
       css.positionStage();
       return;
     }
@@ -768,60 +1077,14 @@ function boot() {
 
     const g = selected ? getGradient(selected) : undefined;
     const target = state.target;
-    const visible = !!(g && target && seen.has(target));
-    const points = visible && !state.handlesHidden ? g!.points : [];
-    const r = target?.getBoundingClientRect();
-    if (visible && state.tool !== 'select' && !cancelPick) {
+    if (!g || !target || !seen.has(target)) return clearHandles();
+    const r = target.getBoundingClientRect();
+    if (state.tool !== 'select' && !cancelPick) {
       if (!canvas.isConnected) stage.prepend(canvas);
-      Object.assign(canvas.style, { left: `${r!.left}px`, top: `${r!.top}px`, width: `${r!.width}px`, height: `${r!.height}px` });
+      Object.assign(canvas.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
     } else canvas.remove();
-    while (handles.length > points.length) handles.pop()!.remove();
-    points.forEach((p, i) => {
-      let el = handles[i];
-      if (!el) {
-        el = h('div', { className: 'handle' });
-        el.addEventListener('pointerdown', (e) => startDrag(e, i));
-        handles.push(el);
-        stage.append(el);
-      }
-      el.className = `handle${state.point === i ? ' active' : ''}${drag?.index === i ? ' dragging' : ''}`;
-      el.style.background = p.color;
-      el.style.left = `${r!.left + p.x * r!.width}px`;
-      el.style.top = `${r!.top + p.y * r!.height}px`;
-      el.title = `${p.color} · drag to move, Delete to remove`;
-    });
-  };
-
-  const startDrag = (e: PointerEvent, index: number) => {
-    if (!state.target || e.button !== 0) return;
-    e.preventDefault();
-    drag = { index, el: state.target };
-    state.point = index;
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    const move = (ev: PointerEvent) => {
-      if (!drag) return;
-      const r = drag.el.getBoundingClientRect();
-      let x = clamp((ev.clientX - r.left) / r.width, -0.25, 1.25);
-      let y = clamp((ev.clientY - r.top) / r.height, -0.25, 1.25);
-      if (ev.shiftKey) {
-        x = Math.round(x * 20) / 20;
-        y = Math.round(y * 20) / 20;
-      }
-      update((d) => {
-        d.points[index]!.x = x;
-        d.points[index]!.y = y;
-      }, `move-${index}`);
-    };
-    const up = () => {
-      drag = null;
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      window.removeEventListener('pointercancel', up);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', up);
-    render();
+    drawHandles(g, r);
+    sweepPool();
   };
 
   const loop = () => {
@@ -844,7 +1107,8 @@ function boot() {
       window.getSelection()?.removeAllRanges();
       if (state.selected !== name || state.target !== el) select(name, el);
       const r = el.getBoundingClientRect();
-      addPoint((e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
+      const at = { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+      addPoint(at.x, at.y, sampleColor(el, at) ?? undefined);
     },
     true,
   );
