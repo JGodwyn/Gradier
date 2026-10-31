@@ -8,12 +8,15 @@ export interface RelPoint {
  * Makes a point's colour follow a curve instead of radiating from a single spot.
  * - `line`: a straight segment from `a` to `b`; the point's `x`/`y` is kept at its midpoint.
  * - `arc`: a circular arc from `a` through the point's `x`/`y` to `b`.
+ * - `path`: a freehand stroke through `points` (smoothed); the point's `x`/`y` sits at its middle.
+ *
+ * `ra` / `rb` scale how wide the colour is at the start / end of the curve (default 1).
  */
-export interface PointShape {
-  type: 'line' | 'arc';
-  a: RelPoint;
-  b: RelPoint;
-}
+export type PointShape =
+  | { type: 'line' | 'arc'; a: RelPoint; b: RelPoint; ra?: number; rb?: number }
+  | { type: 'path'; points: RelPoint[]; ra?: number; rb?: number };
+
+export type GrainType = 'mono' | 'duo' | 'multi';
 
 /** A single colour stop in a mesh gradient. Coordinates are relative (0–1) to the element box. */
 export interface GradientPoint {
@@ -44,6 +47,45 @@ export interface Gradient {
   grain: number;
   /** Animation speed (0 = static). */
   speed: number;
+  /** Grain colour: `mono` (grey, default), `duo` (warm/cool) or `multi` (per-channel). */
+  grainType?: GrainType;
+  /** Grain cell size in CSS pixels (1–4, default 1). */
+  grainSize?: number;
+  /** Grain density (0–2, default 1): below 1 fewer pixels get grain, above 1 it gets stronger. */
+  grainDensity?: number;
+  /** Hue rotation in degrees (−180–180, default 0). */
+  hue?: number;
+  /** Saturation multiplier (0–2, default 1). */
+  saturation?: number;
+  /** Brightness multiplier (0–2, default 1). */
+  brightness?: number;
+  /** Colour temperature (−1 cool … 1 warm, default 0). */
+  temperature?: number;
+}
+
+/** Defaults for the optional look settings; they are left out of saved files when unchanged. */
+export const LOOK_DEFAULTS = {
+  grainType: 'mono' as GrainType,
+  grainSize: 1,
+  grainDensity: 1,
+  hue: 0,
+  saturation: 1,
+  brightness: 1,
+  temperature: 0,
+};
+
+const LOOK_RANGES: Record<Exclude<keyof typeof LOOK_DEFAULTS, 'grainType'>, [number, number]> = {
+  grainSize: [1, 4],
+  grainDensity: [0, 2],
+  hue: [-180, 180],
+  saturation: [0, 2],
+  brightness: [0, 2],
+  temperature: [-1, 1],
+};
+
+/** Read a look setting, falling back to its default. */
+export function look<K extends keyof typeof LOOK_DEFAULTS>(g: Gradient, key: K): (typeof LOOK_DEFAULTS)[K] {
+  return (g[key] ?? LOOK_DEFAULTS[key]) as (typeof LOOK_DEFAULTS)[K];
 }
 
 export type GradientMap = Record<string, Gradient>;
@@ -55,6 +97,8 @@ export const ARM_LENGTH = 0.07;
 /** On-screen radius of a point's area at `radius: 1`, in √(w×h) units. */
 export const AREA_RADIUS = 0.14;
 export const MIN_RADIUS = 0.2;
+/** Most control points kept for a freehand stroke. */
+export const MAX_PATH_POINTS = 64;
 export const MAX_RADIUS = 5;
 
 export const defaultArms = (): Array<[number, number]> => [
@@ -68,11 +112,11 @@ export const defaultArms = (): Array<[number, number]> => [
 export function translatePoint(p: GradientPoint, dx: number, dy: number): void {
   p.x += dx;
   p.y += dy;
-  if (p.shape) {
-    p.shape.a.x += dx;
-    p.shape.a.y += dy;
-    p.shape.b.x += dx;
-    p.shape.b.y += dy;
+  const s = p.shape;
+  if (!s) return;
+  for (const q of s.type === 'path' ? s.points : [s.a, s.b]) {
+    q.x += dx;
+    q.y += dy;
   }
 }
 
@@ -129,7 +173,18 @@ export function normalizeGradient(input: unknown): Gradient {
     warpScale: round(num(g.warpScale, DEFAULTS.warpScale, 0, 1)),
     grain: round(num(g.grain, DEFAULTS.grain, 0, 1)),
     speed: round(num(g.speed, DEFAULTS.speed, 0, 1)),
+    ...normalizeLook(g),
   };
+}
+
+function normalizeLook(g: Record<string, unknown>): Partial<Gradient> {
+  const out: Partial<Gradient> = {};
+  if (g.grainType === 'duo' || g.grainType === 'multi') out.grainType = g.grainType;
+  for (const [key, [min, max]] of Object.entries(LOOK_RANGES) as Array<[keyof typeof LOOK_RANGES, [number, number]]>) {
+    const v = round(num(g[key], LOOK_DEFAULTS[key], min, max));
+    if (v !== LOOK_DEFAULTS[key]) out[key] = v;
+  }
+  return out;
 }
 
 const coord = (v: unknown) => round(num(v, 0.5, -0.5, 1.5));
@@ -149,16 +204,26 @@ function normalizeArms(input: unknown): Array<[number, number]> | undefined {
 
 function normalizeShape(input: unknown): PointShape | undefined {
   if (!input || typeof input !== 'object') return undefined;
-  const { type, a, b } = input as Record<string, unknown>;
-  if (type !== 'line' && type !== 'arc') return undefined;
+  const { type, a, b, points, ra, rb } = input as Record<string, unknown>;
   const pt = (v: unknown): RelPoint | undefined => {
     if (!v || typeof v !== 'object') return undefined;
     const { x, y } = v as Record<string, unknown>;
     return typeof x === 'number' && typeof y === 'number' ? { x: coord(x), y: coord(y) } : undefined;
   };
+  const ends: { ra?: number; rb?: number } = {};
+  const endA = round(num(ra, 1, 0.1, MAX_RADIUS));
+  const endB = round(num(rb, 1, 0.1, MAX_RADIUS));
+  if (endA !== 1) ends.ra = endA;
+  if (endB !== 1) ends.rb = endB;
+  if (type === 'path') {
+    if (!Array.isArray(points)) return undefined;
+    const pts = points.slice(0, MAX_PATH_POINTS).map(pt).filter((q): q is RelPoint => !!q);
+    return pts.length >= 2 ? { type, points: pts, ...ends } : undefined;
+  }
+  if (type !== 'line' && type !== 'arc') return undefined;
   const pa = pt(a);
   const pb = pt(b);
-  return pa && pb ? { type, a: pa, b: pb } : undefined;
+  return pa && pb ? { type, a: pa, b: pb, ...ends } : undefined;
 }
 
 export function isValidName(name: unknown): name is string {

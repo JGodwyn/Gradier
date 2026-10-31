@@ -1,11 +1,13 @@
 import { gradientToCSS } from '../core/css';
 import { defineGradientElement } from '../core/element';
+import { MeshRenderer } from '../core/renderer';
 import { getGradient, getGradients, mountedElements, registerGradients, removeGradient, setGradient, subscribe } from '../core/store';
-import { arcSamples, defaultBulge, distToLine } from '../core/geometry';
+import { arcSamples, bendPath, cumulative, defaultBulge, pointAlong, samplePath, simplifyStroke } from '../core/geometry';
 import {
   AREA_RADIUS,
   defaultArms,
   isValidName,
+  MAX_PATH_POINTS,
   MAX_POINTS,
   MAX_RADIUS,
   MIN_RADIUS,
@@ -15,8 +17,11 @@ import {
   randomGradient,
   rgbToHex,
   translatePoint,
+  LOOK_DEFAULTS,
+  look,
   type Gradient,
   type GradientPoint,
+  type GrainType,
   type PointShape,
 } from '../core/types';
 import { createCssEditor } from './css-editor';
@@ -33,13 +38,38 @@ declare global {
 }
 
 
-const SLIDERS: Array<{ key: keyof Omit<Gradient, 'points'>; label: string }> = [
-  { key: 'softness', label: 'Softness' },
-  { key: 'warp', label: 'Warp' },
-  { key: 'warpScale', label: 'Warp size' },
-  { key: 'grain', label: 'Grain' },
-  { key: 'speed', label: 'Motion' },
+type BaseNumKey = 'softness' | 'warp' | 'warpScale' | 'grain' | 'speed';
+type LookNumKey = 'grainSize' | 'grainDensity' | 'hue' | 'saturation' | 'brightness' | 'temperature';
+type NumKey = BaseNumKey | LookNumKey;
+interface SliderDef {
+  key: NumKey;
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  digits: number;
+  /** Displayed value = stored value × scale. */
+  scale?: number;
+}
+
+const BLEND_SLIDERS: SliderDef[] = [
+  { key: 'softness', label: 'Softness', min: 0, max: 1, step: 0.01, digits: 2 },
+  { key: 'warp', label: 'Warp', min: 0, max: 1, step: 0.01, digits: 2 },
+  { key: 'warpScale', label: 'Warp size', min: 0, max: 1, step: 0.01, digits: 2 },
+  { key: 'speed', label: 'Motion', min: 0, max: 1, step: 0.01, digits: 2 },
 ];
+const GRAIN_SLIDERS: SliderDef[] = [
+  { key: 'grain', label: 'Opacity', min: 0, max: 1, step: 0.01, digits: 2 },
+  { key: 'grainSize', label: 'Grain size', min: 1, max: 4, step: 0.1, digits: 1 },
+  { key: 'grainDensity', label: 'Density', min: 0, max: 2, step: 0.1, digits: 1 },
+];
+const FILTER_SLIDERS: SliderDef[] = [
+  { key: 'hue', label: 'Hue', min: -180, max: 180, step: 1, digits: 0 },
+  { key: 'saturation', label: 'Saturation', min: 0, max: 2, step: 0.01, digits: 2 },
+  { key: 'brightness', label: 'Brightness', min: 0, max: 2, step: 0.01, digits: 2 },
+  { key: 'temperature', label: 'Temperature', min: -100, max: 100, step: 1, digits: 0, scale: 100 },
+];
+const ALL_SLIDERS = [...BLEND_SLIDERS, ...GRAIN_SLIDERS, ...FILTER_SLIDERS];
 
 const script = document.currentScript as HTMLScriptElement | null;
 const BASE = (script?.src ? new URL('.', script.src) : new URL('/__gradier/', location.href)).toString();
@@ -80,6 +110,7 @@ function boot() {
     mode: 'mesh' as 'mesh' | 'css',
     tool: 'select' as Tool,
     handlesHidden: false,
+    exportScale: clamp(Number(storage('gradier:exportScale')) || 2, 1, 4),
   };
   let cancelPick: (() => void) | null = null;
   const history = new Map<string, { undo: string[]; redo: string[]; key?: string; at: number }>();
@@ -107,11 +138,14 @@ function boot() {
     hexes: HTMLInputElement[];
     coords: HTMLElement[];
     sliders: Map<string, [HTMLInputElement, HTMLOutputElement]>;
+    segs: Map<string, HTMLButtonElement[]>;
+    exportW?: HTMLElement;
+    exportH?: HTMLElement;
     status?: HTMLElement;
     save?: HTMLButtonElement;
     undo?: HTMLButtonElement;
     redo?: HTMLButtonElement;
-  } = { rows: [], swatches: [], hexes: [], coords: [], sliders: new Map() };
+  } = { rows: [], swatches: [], hexes: [], coords: [], sliders: new Map(), segs: new Map() };
   let structure = '';
 
   // ---------- helpers ----------
@@ -396,63 +430,168 @@ function boot() {
 
   // ---------- panel ----------
 
+  const sectionOpen = (id: string, fallback: boolean) => {
+    const v = storage(`gradier:section:${id}`);
+    return v === null ? fallback : v === '1';
+  };
+
+  /** A titled panel section. Collapsible ones remember their state per browser. */
+  const section = (
+    id: string,
+    title: string,
+    opts: { collapsible?: boolean; open?: boolean; actions?: Node[] },
+    ...children: Array<Node | null | false>
+  ) => {
+    const open = !opts.collapsible || sectionOpen(id, opts.open ?? true);
+    const chevron = h('span', { className: 'chev' });
+    chevron.innerHTML = ICONS.chevron;
+    const label = h(
+      'div',
+      { className: `label${opts.collapsible ? ' toggle' : ''}` },
+      h('span', { className: 'grow' }, title),
+      ...(open ? (opts.actions ?? []) : []),
+      opts.collapsible ? chevron : null,
+    );
+    const el = h('div', { className: `section${open ? '' : ' closed'}` }, label, ...(open ? children : []));
+    if (opts.collapsible) {
+      label.addEventListener('click', (e) => {
+        if ((e.target as HTMLElement).closest('button')) return;
+        storage(`gradier:section:${id}`, open ? '0' : '1');
+        structure = '';
+        render();
+      });
+    }
+    return el;
+  };
+
+  const numValue = (g: Gradient, key: NumKey) => (key in LOOK_DEFAULTS ? look(g, key as LookNumKey) : g[key as BaseNumKey]);
+
+  const sliderRow = (def: SliderDef) => {
+    const out = h('output', {});
+    const input = h('input', {
+      type: 'range',
+      min: def.min,
+      max: def.max,
+      step: def.step,
+      oninput: (e: Event) =>
+        update((d) => {
+          (d as unknown as Record<string, number>)[def.key] = Number((e.target as HTMLInputElement).value) / (def.scale ?? 1);
+        }, def.key),
+    });
+    refs.sliders.set(def.key, [input, out]);
+    return h('label', { className: 'slider' }, h('span', {}, def.label), input, out);
+  };
+
+  /** A row of toggle buttons; `refs.segs` lets `patch` mark the active one. */
+  const segRow = (id: string, options: Array<[string, string]>, onPick: (value: string) => void) => {
+    const buttons = options.map(([value, label]) => {
+      const b = h('button', { type: 'button', onclick: () => onPick(value) }, label);
+      b.dataset.value = value;
+      return b;
+    });
+    refs.segs.set(id, buttons);
+    return h('div', { className: 'seg' }, ...buttons);
+  };
+
+  /** Export the selected gradient as an image at the element's size × the chosen scale. */
+  const exportImage = async (kind: 'png' | 'jpeg' | 'copy') => {
+    const name = state.selected;
+    const g = name ? getGradient(name) : undefined;
+    if (!name || !g) return;
+    const { w, h: height } = exportSize();
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = height;
+    const renderer = MeshRenderer.create(canvas);
+    if (!renderer) return toast('Export needs WebGL', true);
+    renderer.setGradient(g);
+    renderer.setPixelScale(state.exportScale);
+    renderer.render();
+    const type = kind === 'jpeg' ? 'image/jpeg' : 'image/png';
+    const blob = new Promise<Blob>((resolve, reject) =>
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not encode the image'))), type, 0.92),
+    );
+    try {
+      if (kind === 'copy') {
+        // Hand the clipboard a promise so Safari keeps the user gesture.
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        toast(`Copied ${w}×${height} PNG`);
+      } else {
+        const url = URL.createObjectURL(await blob);
+        const a = h('a', { href: url, download: `${name}@${state.exportScale}x.${kind === 'jpeg' ? 'jpg' : 'png'}` });
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 10_000);
+        toast(`Exported ${w}×${height} ${kind === 'jpeg' ? 'JPG' : 'PNG'}`);
+      }
+    } catch (err) {
+      toast(`Export failed: ${err instanceof Error ? err.message : err}`, true);
+    } finally {
+      renderer.destroy();
+    }
+  };
+
+  const MAX_EXPORT = 8192;
+  const exportSize = () => {
+    const r = state.target?.getBoundingClientRect();
+    const baseW = r && r.width ? r.width : 1200;
+    const baseH = r && r.height ? r.height : 800;
+    const s = Math.min(state.exportScale, MAX_EXPORT / Math.max(baseW, baseH));
+    return { w: Math.max(1, Math.round(baseW * s)), h: Math.max(1, Math.round(baseH * s)) };
+  };
+
   const buildPanel = (g: Gradient | undefined) => {
-    refs = { rows: [], swatches: [], hexes: [], coords: [], sliders: new Map() };
+    refs = { rows: [], swatches: [], hexes: [], coords: [], sliders: new Map(), segs: new Map() };
     const names = Object.keys(getGradients());
     const onPage = new Set(namedElements().map((el) => el.getAttribute('name')));
+    const sep = () => h('span', { className: 'head-sep' });
 
+    refs.undo = button('icon ghost', ICONS.undo, `Undo (${MOD}Z)`, () => (state.mode === 'css' ? css.undo(false) : undo()));
+    refs.redo = button('icon ghost', ICONS.redo, `Redo (${MOD}Shift+Z)`, () => (state.mode === 'css' ? css.undo(true) : undo(true)));
     const head = h(
       'div',
       { className: 'head' },
-      h('span', { className: 'logo' }),
       state.mode === 'css' && Object.keys(getGradients()).length
         ? button('icon ghost', ICONS.back, 'Back to mesh gradients', () => {
             if (css.close()) state.mode = 'mesh';
             render();
           })
-        : null,
+        : h('span', { className: 'logo' }),
       h('span', { className: 'title' }, state.mode === 'css' ? 'CSS gradient' : 'Gradier'),
+      state.mode === 'mesh' ? refs.undo : null,
+      state.mode === 'mesh' ? refs.redo : null,
+      state.mode === 'mesh' ? sep() : null,
       button(`icon ghost${cancelPick ? ' on' : ''}`, ICONS.pick, 'Pick any gradient on the page (Alt+P)', pick),
       button('icon ghost', ICONS.dock, 'Move panel to other side', () => {
         state.dock = state.dock === 'right' ? 'left' : 'right';
         storage('gradier:dock', state.dock);
         render();
       }),
+      sep(),
       button('icon ghost', ICONS.close, 'Close (Alt+G)', () => setOpen(false)),
     );
+    const panelClass = `panel${state.dock === 'left' ? ' left' : ''}`;
 
     if (state.mode === 'css') {
       const { body, foot } = css.build();
-      return h('div', { className: `panel${state.dock === 'left' ? ' left' : ''}` }, head, body, foot);
+      return h('div', { className: panelClass }, head, body, foot);
     }
 
     const body = h('div', { className: 'body' });
 
     if (!state.connected && state.loaded) {
-      body.append(
-        h(
-          'div',
-          { className: 'hint', style: 'color: var(--warn)' },
-          `Can't reach the save server (${API}). You can still edit, but saving won't work.`,
-        ),
-      );
+      body.append(h('div', { className: 'hint warn' }, `Can't reach the save server (${API}). You can still edit, but saving won't work.`));
     }
 
     const picker = h(
       'select',
-      {
-        className: 'grow',
-        onchange: (e: Event) => select((e.target as HTMLSelectElement).value),
-      },
-      ...names.map((n) =>
-        h('option', { value: n, selected: n === state.selected }, onPage.has(n) ? n : `${n}  (not on page)`),
-      ),
+      { className: 'grow', onchange: (e: Event) => select((e.target as HTMLSelectElement).value) },
+      ...names.map((n) => h('option', { value: n, selected: n === state.selected }, onPage.has(n) ? n : `${n}  (not on page)`)),
     );
     body.append(
-      h(
-        'div',
-        { className: 'section' },
-        h('div', { className: 'label' }, 'Gradient'),
+      section(
+        'gradient',
+        'Gradient',
+        {},
         h(
           'div',
           { className: 'row' },
@@ -466,9 +605,10 @@ function boot() {
 
     if (!g || !state.selected) {
       body.append(
-        h(
-          'div',
-          { className: 'section' },
+        section(
+          'start',
+          'Get started',
+          {},
           h('div', { className: 'hint' }, 'Edit any CSS gradient already on this page:'),
           h('button', { className: 'btn primary', type: 'button', onclick: pick }, 'Pick a gradient on the page'),
           h('div', { className: 'hint' }, 'Or add a mesh gradient: put this in your markup, then create a gradient with the same name.'),
@@ -499,11 +639,12 @@ function boot() {
         refs.swatches.push(color);
         refs.hexes.push(hex);
         refs.coords.push(coords);
-        const del = button('icon ghost small', ICONS.trash, 'Remove point', () => removePoint(i));
+        const kind = p.shape ? { line: 'Line', arc: 'Arc', path: 'Stroke' }[p.shape.type] : '';
         const row = h(
           'div',
           {
             className: 'point',
+            title: kind ? `${kind} point` : 'Point',
             onpointerdown: () => {
               state.point = i;
               patch(getGradient(state.selected!));
@@ -512,87 +653,100 @@ function boot() {
           h('label', { className: 'swatch' }, color),
           hex,
           coords,
-          del,
+          button('icon ghost small', ICONS.trash, 'Remove point', () => removePoint(i)),
         );
         refs.rows.push(row);
         list.append(row);
       });
       body.append(
-        h(
-          'div',
-          { className: 'section' },
-          h(
-            'div',
-            { className: 'label' },
-            `Points  ${g.points.length}/${MAX_POINTS}`,
-            h('button', { className: 'btn small', type: 'button', onclick: () => addPoint() }, '+ Add'),
-          ),
+        section(
+          'points',
+          `Points  ${g.points.length}/${MAX_POINTS}`,
+          { collapsible: true, actions: [h('button', { className: 'btn small', type: 'button', onclick: () => addPoint() }, '+ Add')] },
           list,
-          h('div', { className: 'hint' }, 'Drag the handles on the page. Double-click the gradient, or use the Node tool (N), to add a point.'),
+          h('div', { className: 'hint' }, 'Drag the handles on the page. Use the toolbar below to add nodes, lines, arcs and strokes.'),
+        ),
+        section('blend', 'Blend', { collapsible: true }, ...BLEND_SLIDERS.map(sliderRow)),
+        section(
+          'grain',
+          'Grain',
+          { collapsible: true },
+          segRow('grainType', [['mono', 'Mono'], ['duo', 'Duo'], ['multi', 'Multi']], (v) =>
+            update((d) => void (d.grainType = v as GrainType)),
+          ),
+          ...GRAIN_SLIDERS.map(sliderRow),
+        ),
+        section(
+          'filter',
+          'Filter',
+          {
+            collapsible: true,
+            actions: [
+              button('icon ghost small', ICONS.reset, 'Reset filters', () =>
+                update((d) => {
+                  for (const def of FILTER_SLIDERS) delete (d as unknown as Record<string, unknown>)[def.key];
+                }),
+              ),
+            ],
+          },
+          ...FILTER_SLIDERS.map(sliderRow),
         ),
       );
-
-      // Sliders
-      const sliders = h('div', { className: 'section' }, h('div', { className: 'label' }, 'Blend'));
-      for (const { key, label } of SLIDERS) {
-        const out = h('output', {});
-        const input = h('input', {
-          type: 'range',
-          min: 0,
-          max: 1,
-          step: 0.01,
-          oninput: (e: Event) => update((d) => void (d[key] = Number((e.target as HTMLInputElement).value)), key),
-        });
-        refs.sliders.set(key, [input, out]);
-        sliders.append(h('label', { className: 'slider' }, h('span', {}, label), input, out));
-      }
-      body.append(sliders);
 
       // Presets
       const presets = h('div', { className: 'presets' });
       for (const [name, preset] of Object.entries(PRESETS)) {
-        const b = h('button', {
-          className: 'preset',
-          type: 'button',
-          title: name,
-          onclick: () => update(() => structuredClone(preset)),
-        });
+        const b = h('button', { className: 'preset', type: 'button', title: name, onclick: () => update(() => structuredClone(preset)) });
         b.style.background = gradientToCSS(preset);
         presets.append(b);
       }
       body.append(
-        h(
-          'div',
-          { className: 'section' },
-          h('div', { className: 'label' }, 'Presets'),
+        section(
+          'presets',
+          'Presets',
+          { collapsible: true, open: false },
           presets,
           h(
             'div',
             { className: 'row' },
             h('button', { className: 'btn grow', type: 'button', onclick: () => update((d) => ({ ...randomGradient(d.points.length), ...blendOf(d) })) }, 'Randomize'),
-            h(
-              'button',
-              {
-                className: 'btn grow',
-                type: 'button',
-                onclick: shuffleColors,
-              },
-              'Shuffle colors',
-            ),
+            h('button', { className: 'btn grow', type: 'button', onclick: shuffleColors }, 'Shuffle colors'),
           ),
         ),
       );
 
       // Export
+      refs.exportW = h('div', { className: 'field readonly' });
+      refs.exportH = h('div', { className: 'field readonly' });
+      body.append(
+        section(
+          'export',
+          'Export',
+          { collapsible: true },
+          h('div', { className: 'row' }, refs.exportW, refs.exportH),
+          segRow('scale', [['1', '1×'], ['2', '2×'], ['3', '3×'], ['4', '4×']], (v) => {
+            state.exportScale = Number(v);
+            storage('gradier:exportScale', v);
+            patch(getGradient(state.selected!));
+          }),
+          h(
+            'div',
+            { className: 'row' },
+            h('button', { className: 'btn action grow', type: 'button', onclick: () => void exportImage('jpeg') }, 'JPG'),
+            h('button', { className: 'btn action grow', type: 'button', onclick: () => void exportImage('png') }, 'PNG'),
+            h('button', { className: 'btn action grow', type: 'button', title: 'Copy as PNG image', onclick: () => void exportImage('copy') }, 'Copy'),
+          ),
+        ),
+      );
+
+      // Use
       const name = state.selected;
       body.append(
-        h(
-          'div',
-          { className: 'section' },
-          h('div', { className: 'label' }, 'Use'),
-          onPage.has(name)
-            ? null
-            : h('div', { className: 'hint' }, `"${name}" isn't on this page yet. Drop this where you want it:`),
+        section(
+          'use',
+          'Use in code',
+          { collapsible: true, open: false },
+          onPage.has(name) ? null : h('div', { className: 'hint' }, `"${name}" isn't on this page yet. Drop this where you want it:`),
           h('div', { className: 'code' }, `<gradier-gradient name="${name}"></gradier-gradient>`),
           h(
             'div',
@@ -605,14 +759,11 @@ function boot() {
       );
     }
 
-    refs.undo = button('icon ghost', ICONS.undo, `Undo (${MOD}Z)`, () => undo());
-    refs.redo = button('icon ghost', ICONS.redo, `Redo (${MOD}Shift+Z)`, () => undo(true));
     refs.status = h('span', { className: 'status' });
-    refs.save = h('button', { className: 'btn primary', type: 'button', title: `Save (${MOD}S)`, onclick: save }, 'Save');
-    const foot = h('div', { className: 'foot' }, refs.undo, refs.redo, refs.status, refs.save);
+    refs.save = h('button', { className: 'btn action', type: 'button', title: `Save (${MOD}S)`, onclick: save }, 'Save');
+    const foot = h('div', { className: 'foot' }, refs.status, refs.save);
 
-    const el = h('div', { className: `panel${state.dock === 'left' ? ' left' : ''}` }, head, body, foot);
-    return el;
+    return h('div', { className: panelClass }, head, body, foot);
   };
 
   /** Update values in place (keeps focus and slider drags working). */
@@ -624,12 +775,22 @@ function boot() {
         if (sw && sw.value !== p.color) sw.value = p.color;
         if (hex && shadow.activeElement !== hex) hex.value = p.color;
         refs.rows[i]?.classList.toggle('active', state.point === i);
-        refs.coords[i]!.textContent = `${Math.round(p.x * 100)}, ${Math.round(p.y * 100)}`;
+        if (refs.coords[i]) refs.coords[i]!.textContent = `${Math.round(p.x * 100)}, ${Math.round(p.y * 100)}`;
       });
-      for (const [key, [input, out]] of refs.sliders) {
-        const v = g[key as keyof Gradient] as number;
+      for (const def of ALL_SLIDERS) {
+        const pair = refs.sliders.get(def.key);
+        if (!pair) continue;
+        const [input, out] = pair;
+        const v = numValue(g, def.key) * (def.scale ?? 1);
         if (shadow.activeElement !== input) input.value = String(v);
-        out.value = `${Math.round(v * 100)}`;
+        out.value = v.toFixed(def.digits);
+      }
+      const active: Record<string, string> = { grainType: look(g, 'grainType'), scale: String(state.exportScale) };
+      for (const [id, buttons] of refs.segs) for (const b of buttons) b.classList.toggle('on', b.dataset.value === active[id]);
+      if (refs.exportW && refs.exportH) {
+        const { w, h: height } = exportSize();
+        refs.exportW.innerHTML = `<span>W</span>${w}`;
+        refs.exportH.innerHTML = `<span>H</span>${height}`;
       }
     }
     const { count } = changes();
@@ -793,6 +954,19 @@ function boot() {
     }, `${key}-${index}`);
 
   /** Pixel size of one arm/radius unit (√(w×h)) for the element. */
+  /** End circles are drawn at this fraction of the point's area so they read as "width at this end". */
+  const END_SCALE = 0.5;
+
+  const curveEnds = (sh: PointShape): [Rel, Rel] =>
+    sh.type === 'path' ? [sh.points[0]!, sh.points[sh.points.length - 1]!] : [sh.a, sh.b];
+
+  /** The middle of a freehand stroke (by on-screen length), where its colour handle sits. */
+  const pathMid = (points: Rel[], r: { width: number; height: number }): Rel => {
+    const smooth = samplePath(points.map((q) => ({ x: q.x * r.width, y: q.y * r.height })), 64);
+    const m = pointAlong(smooth, 0.5);
+    return { x: m.x / r.width, y: m.y / r.height };
+  };
+
   const unitOf = (el: HTMLElement) => {
     const r = el.getBoundingClientRect();
     return { r, unit: Math.sqrt(Math.max(r.width * r.height, 1)) };
@@ -801,7 +975,7 @@ function boot() {
   const onColorHandle = (e: PointerEvent, i: number) =>
     startDrag(e, `h:${i}`, i, (rel) =>
       editPoint(i, 'move', (p) => {
-        if (p.shape?.type === 'line') translatePoint(p, rel.x - p.x, rel.y - p.y);
+        if (p.shape && p.shape.type !== 'arc') translatePoint(p, rel.x - p.x, rel.y - p.y);
         else {
           p.x = rel.x;
           p.y = rel.y;
@@ -809,15 +983,45 @@ function boot() {
       }),
     );
 
-  const onEndpoint = (e: PointerEvent, i: number, end: 'a' | 'b') =>
+  const onEndpoint = (e: PointerEvent, i: number, end: 'a' | 'b') => {
+    // Freehand strokes bend from the original shape, so remember it at drag start.
+    const start = state.selected ? getGradient(state.selected)?.points[i]?.shape : undefined;
+    const original = start?.type === 'path' ? structuredClone(start.points) : null;
     startDrag(e, `ep:${i}:${end}`, i, (rel) =>
-      editPoint(i, `end-${end}`, (p) => {
-        if (!p.shape) return;
-        p.shape[end] = rel;
-        if (p.shape.type === 'line') {
-          p.x = (p.shape.a.x + p.shape.b.x) / 2;
-          p.y = (p.shape.a.y + p.shape.b.y) / 2;
+      editPoint(i, `end-${end}`, (p, el) => {
+        const sh = p.shape;
+        if (!sh) return;
+        if (sh.type === 'path') {
+          if (!original) return;
+          const from = end === 'a' ? original[0]! : original[original.length - 1]!;
+          const { r } = unitOf(el);
+          const px = original.map((q) => ({ x: q.x * r.width, y: q.y * r.height }));
+          sh.points = bendPath(px, end, (rel.x - from.x) * r.width, (rel.y - from.y) * r.height).map((q) => ({
+            x: q.x / r.width,
+            y: q.y / r.height,
+          }));
+          Object.assign(p, pathMid(sh.points, r));
+          return;
         }
+        sh[end] = rel;
+        if (sh.type === 'line') {
+          p.x = (sh.a.x + sh.b.x) / 2;
+          p.y = (sh.a.y + sh.b.y) / 2;
+        }
+      }),
+    );
+  };
+
+  /** Drag a curve end's grip to make the colour wider or narrower at that end. */
+  const onEndGrip = (e: PointerEvent, i: number, end: 'a' | 'b') =>
+    startDrag(e, `egrip:${i}:${end}`, i, (rel) =>
+      editPoint(i, `ends-${end}`, (p, el) => {
+        const sh = p.shape;
+        if (!sh) return;
+        const { r, unit } = unitOf(el);
+        const at = curveEnds(sh)[end === 'a' ? 0 : 1];
+        const dist = Math.hypot((rel.x - at.x) * r.width, (rel.y - at.y) * r.height);
+        sh[end === 'a' ? 'ra' : 'rb'] = clamp(dist / (END_SCALE * AREA_RADIUS * (p.radius ?? 1) * unit), 0.1, MAX_RADIUS);
       }),
     );
 
@@ -869,10 +1073,8 @@ function boot() {
     const a = samples[0]!;
     const b = samples[samples.length - 1]!;
     const chord = Math.hypot(px(b).x - px(a).x, px(b).y - px(a).y);
-    if (chord < 8) {
-      if (tool === 'pencil') toast('Draw an open stroke: it becomes a line or an arc');
-      return;
-    }
+    const length = cumulative(samples.map(px)).at(-1)!;
+    if ((tool === 'pencil' ? length : chord) < 8) return;
     let shape: PointShape;
     let mid: Rel;
     if (tool === 'line') {
@@ -882,15 +1084,10 @@ function boot() {
       shape = { type: 'arc', a, b };
       mid = rel(defaultBulge(px(a), px(b)));
     } else {
-      // Pencil: fit the freehand stroke with the arc through its start, halfway point and end.
-      const pts = samples.map(px);
-      const lengths = [0];
-      for (let k = 1; k < pts.length; k++) lengths.push(lengths[k - 1]! + Math.hypot(pts[k]!.x - pts[k - 1]!.x, pts[k]!.y - pts[k - 1]!.y));
-      const half = lengths[lengths.length - 1]! / 2;
-      const m = pts[Math.max(0, lengths.findIndex((l) => l >= half))]!;
-      const straight = distToLine(m, pts[0]!, pts[pts.length - 1]!) < chord * 0.06;
-      shape = { type: straight ? 'line' : 'arc', a, b };
-      mid = straight ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : rel(m);
+      // Pencil: keep the stroke itself, thinned to control points a few pixels apart.
+      const points = simplifyStroke(samples.map(px), 6, MAX_PATH_POINTS).map(rel);
+      shape = { type: 'path', points };
+      mid = pathMid(points, r);
     }
     addPoint(mid.x, mid.y, sampleColor(el, mid) ?? undefined, shape);
   };
@@ -948,6 +1145,27 @@ function boot() {
     return el;
   };
 
+  /** A dashed circle with a curved grip on its rim (between angles `from`–`to`, degrees, clockwise from 3 o'clock). */
+  const ring = (key: string, gripKey: string, c: Rel, R: number, from: number, to: number, onDown: (e: PointerEvent) => void, title: string) => {
+    const circle = svgEl(key, 'circle', 'area');
+    circle.setAttribute('cx', `${c.x}`);
+    circle.setAttribute('cy', `${c.y}`);
+    circle.setAttribute('r', `${Math.max(R, 1)}`);
+    const gr = Math.max(R, 1) + 5;
+    const a0 = (from * Math.PI) / 180;
+    const a1 = (to * Math.PI) / 180;
+    const d = `M ${c.x + gr * Math.cos(a0)} ${c.y + gr * Math.sin(a0)} A ${gr} ${gr} 0 0 1 ${c.x + gr * Math.cos(a1)} ${c.y + gr * Math.sin(a1)}`;
+    svgEl(gripKey, 'path', `grip${dragKey === gripKey ? ' on' : ''}`).setAttribute('d', d);
+    const hit = get(`${gripKey}:hit`, () => {
+      const el = document.createElementNS(SVG_NS, 'path');
+      el.setAttribute('class', 'grip-hit');
+      el.appendChild(document.createElementNS(SVG_NS, 'title')).textContent = title;
+      el.addEventListener('pointerdown', (e) => onDown(e as PointerEvent));
+      return el;
+    }, svg);
+    hit.setAttribute('d', d);
+  };
+
   /** Draw handles, curves, the area circle and arms for the selected gradient. */
   const drawHandles = (g: Gradient, r: DOMRect) => {
     if (!svg.isConnected) stage.prepend(svg);
@@ -961,30 +1179,18 @@ function boot() {
         const c = toPx(sel);
         // Curve the colour follows.
         if (sel.shape) {
-          const a = toPx(sel.shape.a);
-          const b = toPx(sel.shape.b);
-          const pts = sel.shape.type === 'arc' ? arcSamples(a, c, b) : [a, b];
+          const sh = sel.shape;
+          const pts =
+            sh.type === 'path'
+              ? samplePath(sh.points.map(toPx), 96)
+              : sh.type === 'arc'
+                ? arcSamples(toPx(sh.a), c, toPx(sh.b))
+                : [toPx(sh.a), toPx(sh.b)];
           svgEl(`curve:${i}`, 'polyline', 'curve').setAttribute('points', polyline(pts));
         }
         // Area circle + resize grip.
         const R = AREA_RADIUS * (sel.radius ?? 1) * unit;
-        const area = svgEl(`area:${i}`, 'circle', 'area');
-        area.setAttribute('cx', `${c.x}`);
-        area.setAttribute('cy', `${c.y}`);
-        area.setAttribute('r', `${R}`);
-        const gr = R + 5;
-        const a0 = (15 * Math.PI) / 180;
-        const a1 = (65 * Math.PI) / 180;
-        const d = `M ${c.x + gr * Math.cos(a0)} ${c.y + gr * Math.sin(a0)} A ${gr} ${gr} 0 0 1 ${c.x + gr * Math.cos(a1)} ${c.y + gr * Math.sin(a1)}`;
-        svgEl(`grip:${i}`, 'path', `grip${dragKey === `grip:${i}` ? ' on' : ''}`).setAttribute('d', d);
-        const hit = get(`griphit:${i}`, () => {
-          const el = document.createElementNS(SVG_NS, 'path');
-          el.setAttribute('class', 'grip-hit');
-          el.appendChild(document.createElementNS(SVG_NS, 'title')).textContent = 'Drag to expand or shrink the area';
-          el.addEventListener('pointerdown', (e) => onGrip(e as PointerEvent, i));
-          return el;
-        }, svg);
-        hit.setAttribute('d', d);
+        ring(`area:${i}`, `grip:${i}`, c, R, 15, 65, (e) => onGrip(e, i), 'Drag to expand or shrink the area');
         // Direction arms (plain points only).
         if (!sel.shape) {
           (sel.arms ?? defaultArms()).forEach(([dx, dy], k) => {
@@ -997,10 +1203,16 @@ function boot() {
             knob(`arm:${i}:${k}`, 'knob', end.x, end.y, (e) => onArm(e, i, k), 'Drag to stretch the colour this way');
           });
         } else {
-          const a = toPx(sel.shape.a);
-          const b = toPx(sel.shape.b);
-          knob(`ep:${i}:a`, 'knob end', a.x, a.y, (e) => onEndpoint(e, i, 'a'), 'Drag to move this end');
-          knob(`ep:${i}:b`, 'knob end', b.x, b.y, (e) => onEndpoint(e, i, 'b'), 'Drag to move this end');
+          const sh = sel.shape;
+          const [a, b] = curveEnds(sh).map(toPx) as [Rel, Rel];
+          const bend = sh.type === 'path' ? 'Drag to bend the stroke from this end' : 'Drag to move this end';
+          // Freehand strokes also get a width circle at each end.
+          if (sh.type === 'path') {
+            ring(`earea:${i}:a`, `egrip:${i}:a`, a, END_SCALE * R * (sh.ra ?? 1), 60, 120, (e) => onEndGrip(e, i, 'a'), 'Drag to change the width at this end');
+            ring(`earea:${i}:b`, `egrip:${i}:b`, b, END_SCALE * R * (sh.rb ?? 1), 60, 120, (e) => onEndGrip(e, i, 'b'), 'Drag to change the width at this end');
+          }
+          knob(`ep:${i}:a`, 'knob end', a.x, a.y, (e) => onEndpoint(e, i, 'a'), bend);
+          knob(`ep:${i}:b`, 'knob end', b.x, b.y, (e) => onEndpoint(e, i, 'b'), bend);
         }
       }
       g.points.forEach((p, k) => {
@@ -1011,6 +1223,8 @@ function boot() {
         el.title =
           p.shape?.type === 'arc'
             ? `${p.color} · drag to bend the arc, Delete to remove`
+            : p.shape?.type === 'path'
+            ? `${p.color} · drag to move the stroke, Delete to remove`
             : `${p.color} · drag to move, Delete to remove`;
       });
     }

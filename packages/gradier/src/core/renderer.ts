@@ -1,5 +1,9 @@
-import { arcThrough } from './geometry';
-import { ARM_LENGTH, hexToRgb, MAX_POINTS, type Gradient } from './types';
+import { arcSamples, samplePath, type Vec } from './geometry';
+import { filterParams, srgbToOklab } from './color';
+import { ARM_LENGTH, look, MAX_POINTS, type Gradient } from './types';
+
+/** Samples per curve in the path texture. */
+const PATH_N = 32;
 
 const VERT = `
 attribute vec2 a_pos;
@@ -18,17 +22,25 @@ uniform float u_time;
 uniform int u_count;
 uniform vec2 u_pos[${MAX_POINTS}];
 uniform vec3 u_col[${MAX_POINTS}];
-// x: kind (0 point, 1 line, 2 arc), y: radius multiplier, z: arc sweep
+// x: kind (0 point, 1 curve), y: radius multiplier, z: number of curve samples
 uniform vec3 u_meta[${MAX_POINTS}];
-// line: (ax, ay, bx, by) in uv; arc: (cx, cy, r, start) in aspect-corrected space
-uniform vec4 u_shape[${MAX_POINTS}];
+// curve width multipliers at the start (x) and end (y)
+uniform vec2 u_ends[${MAX_POINTS}];
 // arm angles (sorted ascending, [0, 2pi)) and lengths
 uniform vec4 u_armAng[${MAX_POINTS}];
 uniform vec4 u_armLen[${MAX_POINTS}];
+// curve samples: one row per point, 16-bit x/y packed into RGBA
+uniform sampler2D u_paths;
 uniform float u_power;
 uniform float u_warp;
 uniform float u_warpScale;
 uniform float u_grain;
+// x: type (0 mono, 1 duo, 2 multi), y: cell size in device pixels, z: density
+uniform vec3 u_grainOpts;
+// x: hue (radians), y: saturation, z: brightness, w: temperature
+uniform vec4 u_filter;
+
+const int PATH_N = ${PATH_N};
 
 // Simplex noise (Ashima Arts / Stefan Gustavson, MIT)
 vec3 permute(vec3 x) { return mod(((x * 34.0) + 1.0) * x, 289.0); }
@@ -87,11 +99,10 @@ float armScale(vec2 d, vec4 a, vec4 l) {
   return coneScale(d, a.w, a.x + TAU, l.w, l.x);
 }
 
-// Offset from the nearest point of the segment a-b to q.
-vec2 toSegment(vec2 q, vec2 a, vec2 b) {
-  vec2 ab = b - a;
-  float t = clamp(dot(q - a, ab) / max(dot(ab, ab), 1e-9), 0.0, 1.0);
-  return q - (a + ab * t);
+vec2 pathPoint(int i, int k) {
+  vec4 t = texture2D(u_paths, vec2((float(k) + 0.5) / float(PATH_N), (float(i) + 0.5) / float(${MAX_POINTS})));
+  vec2 v = vec2(t.r * 65280.0 + t.g * 255.0, t.b * 65280.0 + t.a * 255.0) / 65535.0;
+  return v * 2.0 - 0.5;
 }
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
@@ -119,40 +130,62 @@ void main() {
   float freq = mix(0.8, 6.0, u_warpScale);
   vec2 n = vec2(snoise(uv * scale * freq + u_time * 0.15), snoise(uv * scale * freq + 17.3 - u_time * 0.15));
   uv += n * u_warp * 0.22;
+  vec2 q = uv * scale;
 
   vec3 sum = vec3(0.0);
   float total = 0.0;
   for (int i = 0; i < ${MAX_POINTS}; i++) {
     if (i >= u_count) break;
     vec3 meta = u_meta[i];
-    vec4 sh = u_shape[i];
-    vec2 q = uv * scale;
-    vec2 d;
+    float dist;
     if (meta.x < 0.5) {
-      d = q - u_pos[i] * scale;
-    } else if (meta.x < 1.5) {
-      d = toSegment(q, sh.xy * scale, sh.zw * scale);
+      vec2 d = q - u_pos[i] * scale;
+      dist = length(d) * armScale(d, u_armAng[i], u_armLen[i]);
     } else {
-      vec2 v = q - sh.xy;
-      float ang = atan(v.y, v.x);
-      float rel = mod(ang - sh.w, TAU);
-      if (rel <= meta.z) {
-        d = v - normalize(v + 1e-9) * sh.z;
-      } else {
-        vec2 a = sh.xy + sh.z * vec2(cos(sh.w), sin(sh.w));
-        vec2 b = sh.xy + sh.z * vec2(cos(sh.w + meta.z), sin(sh.w + meta.z));
-        vec2 da = q - a, db = q - b;
-        d = dot(da, da) < dot(db, db) ? da : db;
+      // Distance to the curve, divided by the curve's width at the nearest spot.
+      dist = 1e9;
+      vec2 prev = pathPoint(i, 0) * scale;
+      for (int k = 1; k < PATH_N; k++) {
+        if (float(k) >= meta.z) break;
+        vec2 cur = pathPoint(i, k) * scale;
+        vec2 ab = cur - prev;
+        float t = clamp(dot(q - prev, ab) / max(dot(ab, ab), 1e-9), 0.0, 1.0);
+        float along = (float(k - 1) + t) / max(meta.z - 1.0, 1.0);
+        float width = mix(u_ends[i].x, u_ends[i].y, along);
+        dist = min(dist, length(q - prev - ab * t) / width);
+        prev = cur;
       }
     }
-    float dist = length(d) * armScale(d, u_armAng[i], u_armLen[i]) / meta.y;
+    dist /= meta.y;
     float w = pow(dist * dist + 1e-5, -u_power * 0.5);
     sum += u_col[i] * w;
     total += w;
   }
-  vec3 col = linearToSrgb(oklabToLinear(sum / total));
-  float r = hash(gl_FragCoord.xy + fract(u_time) * 100.0) - 0.5;
-  col += r * (u_grain * 0.35 + 1.5 / 255.0);
+
+  // Colour filters, in OKLab.
+  vec3 lab = sum / total;
+  float hc = cos(u_filter.x), hs = sin(u_filter.x);
+  lab.yz = vec2(lab.y * hc - lab.z * hs, lab.y * hs + lab.z * hc) * u_filter.y;
+  lab.y += u_filter.w * 0.012;
+  lab.z += u_filter.w * 0.06;
+  lab.x *= u_filter.z;
+  vec3 col = linearToSrgb(oklabToLinear(lab));
+
+  // Film grain.
+  float seed = fract(u_time) * 100.0;
+  vec2 cell = floor(gl_FragCoord.xy / max(u_grainOpts.y, 1.0));
+  float amount = u_grain * 0.35 * max(u_grainOpts.z, 1.0);
+  float coverage = step(hash(cell * 1.731 + seed + 4.7), min(u_grainOpts.z, 1.0));
+  float r = hash(cell + seed) - 0.5;
+  vec3 grain = vec3(r);
+  if (u_grainOpts.x > 1.5) {
+    grain = vec3(r, hash(cell + seed + 13.1) - 0.5, hash(cell + seed + 27.9) - 0.5);
+  } else if (u_grainOpts.x > 0.5) {
+    grain = vec3(r) + (hash(cell + seed + 13.1) - 0.5) * vec3(0.6, 0.1, -0.6);
+  }
+  col += grain * amount * coverage;
+  // Tiny per-pixel dither against banding.
+  col += (hash(gl_FragCoord.xy + seed) - 0.5) * (1.5 / 255.0);
   gl_FragColor = vec4(col, 1.0);
 }`;
 
@@ -163,21 +196,7 @@ const DEFAULT_ARMS: Array<[number, number]> = [
   [0, -ARM_LENGTH],
 ];
 
-function srgbToOklab(hex: string): [number, number, number] {
-  const lin = hexToRgb(hex).map((v) => {
-    const c = v / 255;
-    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-  });
-  const [r, g, b] = lin as [number, number, number];
-  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
-  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
-  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
-  return [
-    0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
-    1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
-    0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s,
-  ];
-}
+const GRAIN_TYPES = { mono: 0, duo: 1, multi: 2 } as const;
 
 /** Renders a mesh gradient into a canvas with WebGL. */
 export class MeshRenderer {
@@ -186,6 +205,9 @@ export class MeshRenderer {
   private uniforms: Record<string, WebGLUniformLocation | null> = {};
   private gradient: Gradient | null = null;
   private time = 0;
+  private pixelScale = 1;
+  private pathTex: WebGLTexture;
+  private pathData = new Uint8Array(PATH_N * MAX_POINTS * 4);
 
   static create(canvas: HTMLCanvasElement): MeshRenderer | null {
     const gl = canvas.getContext('webgl', { antialias: false, premultipliedAlpha: false, preserveDrawingBuffer: true });
@@ -222,7 +244,17 @@ export class MeshRenderer {
     gl.enableVertexAttribArray(loc);
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
 
-    for (const name of ['u_res', 'u_time', 'u_count', 'u_pos', 'u_col', 'u_meta', 'u_shape', 'u_armAng', 'u_armLen', 'u_power', 'u_warp', 'u_warpScale', 'u_grain']) {
+    this.pathTex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, this.pathTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    for (const name of [
+      'u_res', 'u_time', 'u_count', 'u_pos', 'u_col', 'u_meta', 'u_ends', 'u_armAng', 'u_armLen', 'u_paths',
+      'u_power', 'u_warp', 'u_warpScale', 'u_grain', 'u_grainOpts', 'u_filter',
+    ]) {
       this.uniforms[name] = gl.getUniformLocation(p, name);
     }
   }
@@ -233,6 +265,11 @@ export class MeshRenderer {
 
   setTime(t: number) {
     this.time = t;
+  }
+
+  /** Device pixels per CSS pixel, used to size the grain. Read from the canvas when it is in the page. */
+  setPixelScale(s: number) {
+    this.pixelScale = s;
   }
 
   render() {
@@ -246,7 +283,7 @@ export class MeshRenderer {
     const pos = new Float32Array(MAX_POINTS * 2);
     const col = new Float32Array(MAX_POINTS * 3);
     const meta = new Float32Array(MAX_POINTS * 3);
-    const shape = new Float32Array(MAX_POINTS * 4);
+    const ends = new Float32Array(MAX_POINTS * 2).fill(1);
     const armAng = new Float32Array(MAX_POINTS * 4);
     const armLen = new Float32Array(MAX_POINTS * 4).fill(ARM_LENGTH);
     const t = this.time;
@@ -254,6 +291,8 @@ export class MeshRenderer {
     const aspect = (canvas.width || 1) / (canvas.height || 1);
     const sx = Math.sqrt(aspect);
     const sy = 1 / sx;
+    const toScaled = (p: Vec, dx: number, dy: number) => ({ x: (p.x + dx) * sx, y: (p.y + dy) * sy });
+    const data = this.pathData;
     g.points.slice(0, count).forEach((pt, i) => {
       const dx = drift * Math.sin(t * 0.6 + i * 1.7);
       const dy = drift * Math.cos(t * 0.5 + i * 2.3);
@@ -261,18 +300,29 @@ export class MeshRenderer {
       pos[i * 2 + 1] = pt.y + dy;
       col.set(srgbToOklab(pt.color), i * 3);
       meta[i * 3 + 1] = pt.radius ?? 1;
-      if (pt.shape) {
-        const a = { x: (pt.shape.a.x + dx) * sx, y: (pt.shape.a.y + dy) * sy };
-        const b = { x: (pt.shape.b.x + dx) * sx, y: (pt.shape.b.y + dy) * sy };
-        const arc = pt.shape.type === 'arc' ? arcThrough(a, { x: pos[i * 2]! * sx, y: pos[i * 2 + 1]! * sy }, b) : null;
-        if (arc) {
-          meta[i * 3] = 2;
-          meta[i * 3 + 2] = arc.sweep;
-          shape.set([arc.cx, arc.cy, arc.r, arc.start], i * 4);
-        } else {
-          meta[i * 3] = 1;
-          shape.set([pt.shape.a.x + dx, pt.shape.a.y + dy, pt.shape.b.x + dx, pt.shape.b.y + dy], i * 4);
-        }
+      const sh = pt.shape;
+      if (sh) {
+        // Sample the curve in aspect-corrected space so samples are evenly spaced on screen.
+        const samples =
+          sh.type === 'path'
+            ? samplePath(sh.points.map((p) => toScaled(p, dx, dy)), PATH_N)
+            : sh.type === 'arc'
+              ? arcSamples(toScaled(sh.a, dx, dy), toScaled(pt, 0, 0), toScaled(sh.b, dx, dy), PATH_N - 1)
+              : [toScaled(sh.a, dx, dy), toScaled(sh.b, dx, dy)];
+        meta[i * 3] = 1;
+        meta[i * 3 + 2] = samples.length;
+        ends[i * 2] = sh.ra ?? 1;
+        ends[i * 2 + 1] = sh.rb ?? 1;
+        samples.forEach((s, k) => {
+          const enc = (v: number) => Math.round(Math.min(1, Math.max(0, (v + 0.5) / 2)) * 65535);
+          const ex = enc(s.x / sx);
+          const ey = enc(s.y / sy);
+          const o = (i * PATH_N + k) * 4;
+          data[o] = ex >> 8;
+          data[o + 1] = ex & 255;
+          data[o + 2] = ey >> 8;
+          data[o + 3] = ey & 255;
+        });
       }
       // Arms sorted by angle so the shader can interpolate between neighbours.
       const arms = (pt.arms ?? DEFAULT_ARMS)
@@ -283,19 +333,29 @@ export class MeshRenderer {
         armLen[i * 4 + k] = arm.len;
       });
     });
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.pathTex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, PATH_N, MAX_POINTS, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    gl.uniform1i(u.u_paths!, 0);
+
+    const px = canvas.clientWidth ? canvas.width / canvas.clientWidth : this.pixelScale;
+    const f = filterParams(g);
     gl.uniform2f(u.u_res!, canvas.width || 1, canvas.height || 1);
     gl.uniform1f(u.u_time!, t);
     gl.uniform1i(u.u_count!, count);
     gl.uniform2fv(u.u_pos!, pos);
     gl.uniform3fv(u.u_col!, col);
     gl.uniform3fv(u.u_meta!, meta);
-    gl.uniform4fv(u.u_shape!, shape);
+    gl.uniform2fv(u.u_ends!, ends);
     gl.uniform4fv(u.u_armAng!, armAng);
     gl.uniform4fv(u.u_armLen!, armLen);
     gl.uniform1f(u.u_power!, 1.5 + g.softness * 4.5);
     gl.uniform1f(u.u_warp!, g.warp);
     gl.uniform1f(u.u_warpScale!, g.warpScale);
     gl.uniform1f(u.u_grain!, g.grain);
+    gl.uniform3f(u.u_grainOpts!, GRAIN_TYPES[look(g, 'grainType')], look(g, 'grainSize') * px, look(g, 'grainDensity'));
+    gl.uniform4f(u.u_filter!, f.hue, f.saturation, f.brightness, f.temperature);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
