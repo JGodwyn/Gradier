@@ -3,11 +3,18 @@
   "version": "0.1.0",
   "description": "Edit mesh gradients live on your site during development and save them straight to your codebase.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JGodwyn/Gradier.git",
+    "directory": "packages/gradier"
+  },
+  "homepage": "https://github.com/JGodwyn/Gradier#readme",
+  "bugs": "https://github.com/JGodwyn/Gradier/issues",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "gradier": "./dist/cli.js"
+    "gradier": "dist/cli.js"
   },
   "exports": {
     ".": {
@@ -36,7 +43,9 @@
     "build": "node scripts/build.mjs && tsc -p tsconfig.json --emitDeclarationOnly",
     "dev": "node scripts/build.mjs --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node scripts/test.mjs"
+    "test": "node scripts/test.mjs",
+    "prepack": "npm run build && node -e \"require('fs').copyFileSync('../../README.md', 'README.md')\"",
+    "prepublishOnly": "npm run typecheck && npm test"
   },
   "peerDependencies": {
     "react": ">=18",
