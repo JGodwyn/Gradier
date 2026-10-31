@@ -18,6 +18,9 @@ export type PointShape =
 
 export type GrainType = 'mono' | 'duo' | 'multi';
 
+/** The filter settings a point can override. */
+export const POINT_FILTERS = ['hue', 'saturation', 'brightness', 'temperature'] as const;
+
 /** A single colour stop in a mesh gradient. Coordinates are relative (0–1) to the element box. */
 export interface GradientPoint {
   x: number;
@@ -33,12 +36,33 @@ export interface GradientPoint {
   arms?: Array<[number, number]>;
   /** Optional curve the colour follows. */
   shape?: PointShape;
+  /** Per-point softness (0–1); overrides the gradient's softness for this point. */
+  softness?: number;
+  /** Per-point filters, applied on top of the gradient's filters. */
+  hue?: number;
+  saturation?: number;
+  brightness?: number;
+  temperature?: number;
 }
+
+/** How point colours are mixed. `oklab` (default) keeps blends vivid; the last four add a contrast curve on top. */
+export type BlendMode = 'normal' | 'linear' | 'oklab' | 'screen' | 'multiply' | 'overlay' | 'softlight';
+export const BLEND_MODES: Array<[BlendMode, string]> = [
+  ['normal', 'Normal'],
+  ['linear', 'Linear'],
+  ['oklab', 'OKLab'],
+  ['screen', 'Screen'],
+  ['multiply', 'Multiply'],
+  ['overlay', 'Overlay'],
+  ['softlight', 'Soft light'],
+];
 
 export interface Gradient {
   points: GradientPoint[];
-  /** How sharply each point's colour holds before blending (0 = very soft, 1 = crisp). */
+  /** How soft the blend between points is (0 = crisp, 1 = very soft). */
   softness: number;
+  /** How colours mix (default `oklab`). */
+  blendMode?: BlendMode;
   /** Amount of organic noise distortion (0–1). */
   warp: number;
   /** Size of the warp noise (0 = large, smooth waves, 1 = small ripples). */
@@ -65,6 +89,7 @@ export interface Gradient {
 
 /** Defaults for the optional look settings; they are left out of saved files when unchanged. */
 export const LOOK_DEFAULTS = {
+  blendMode: 'oklab' as BlendMode,
   grainType: 'mono' as GrainType,
   grainSize: 1,
   grainDensity: 1,
@@ -74,7 +99,7 @@ export const LOOK_DEFAULTS = {
   temperature: 0,
 };
 
-const LOOK_RANGES: Record<Exclude<keyof typeof LOOK_DEFAULTS, 'grainType'>, [number, number]> = {
+const LOOK_RANGES: Record<Exclude<keyof typeof LOOK_DEFAULTS, 'grainType' | 'blendMode'>, [number, number]> = {
   grainSize: [1, 4],
   grainDensity: [0, 2],
   hue: [-180, 180],
@@ -156,6 +181,13 @@ export function normalizeGradient(input: unknown): Gradient {
     if (r !== 1) out.radius = r;
     const a = normalizeArms(arms);
     if (a) out.arms = a;
+    const raw = p as Record<string, unknown>;
+    if (typeof raw.softness === 'number') out.softness = round(num(raw.softness, 0.5, 0, 1));
+    for (const key of POINT_FILTERS) {
+      const [min, max] = LOOK_RANGES[key];
+      const v = round(num(raw[key], LOOK_DEFAULTS[key], min, max));
+      if (v !== LOOK_DEFAULTS[key]) out[key] = v;
+    }
     const sh = normalizeShape(shape);
     if (sh) {
       out.shape = sh;
@@ -180,6 +212,7 @@ export function normalizeGradient(input: unknown): Gradient {
 function normalizeLook(g: Record<string, unknown>): Partial<Gradient> {
   const out: Partial<Gradient> = {};
   if (g.grainType === 'duo' || g.grainType === 'multi') out.grainType = g.grainType;
+  if (BLEND_MODES.some(([m]) => m === g.blendMode) && g.blendMode !== 'oklab') out.blendMode = g.blendMode as BlendMode;
   for (const [key, [min, max]] of Object.entries(LOOK_RANGES) as Array<[keyof typeof LOOK_RANGES, [number, number]]>) {
     const v = round(num(g[key], LOOK_DEFAULTS[key], min, max));
     if (v !== LOOK_DEFAULTS[key]) out[key] = v;
@@ -290,7 +323,7 @@ export const PRESETS: Record<string, Gradient> = {
   },
   Ocean: {
     ...DEFAULTS,
-    softness: 0.4,
+    softness: 0.6,
     points: [
       { x: 0.2, y: 0.1, color: '#caf0f8' },
       { x: 0.85, y: 0.25, color: '#48cae4' },

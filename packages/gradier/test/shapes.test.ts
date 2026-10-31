@@ -115,3 +115,32 @@ test('normalizeGradient keeps path shapes and end widths, and only non-default l
   assert.equal(g.saturation, 1.5);
   assert.equal(g.brightness, undefined);
 });
+
+test('per-point softness and filters, and blend mode, survive normalization; defaults are dropped', () => {
+  const g = normalizeGradient({
+    blendMode: 'overlay',
+    points: [
+      { x: 0.1, y: 0.1, color: '#f00', softness: 0.9, hue: 30, saturation: 1 },
+      { x: 0.9, y: 0.9, color: '#00f' },
+    ],
+  });
+  assert.equal(g.blendMode, 'overlay');
+  assert.equal(g.points[0]!.softness, 0.9);
+  assert.equal(g.points[0]!.hue, 30);
+  assert.equal(g.points[0]!.saturation, undefined);
+  assert.equal(g.points[1]!.softness, undefined);
+  assert.equal(normalizeGradient({ blendMode: 'oklab', points: g.points }).blendMode, undefined);
+  assert.equal(normalizeGradient({ blendMode: 'bogus', points: g.points }).blendMode, undefined);
+});
+
+test('filters are affine in OKLab, so filtering each colour before blending equals filtering the blend', async () => {
+  const { applyFilters, srgbToOklab } = await import('../src/core/color');
+  const f = { hue: 70, saturation: 1.4, brightness: 0.8, temperature: 0.5 };
+  const a = srgbToOklab('#ff6b6b');
+  const b = srgbToOklab('#2bd2ff');
+  const w = 0.3;
+  const mix = (p: number[], q: number[]) => p.map((v, i) => v * w + q[i]! * (1 - w));
+  const before = mix(applyFilters(a, f), applyFilters(b, f));
+  const after = applyFilters(mix(a, b) as [number, number, number], f);
+  before.forEach((v, i) => close(v, after[i]!, 1e-9));
+});
