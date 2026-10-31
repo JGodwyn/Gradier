@@ -165,7 +165,14 @@ npx gradier skill --print    # or print it to paste elsewhere
 | Pick a gradient | Click its label on the page, or use the dropdown |
 | Create a missing gradient | Click a yellow `name · click to create` label |
 | Move a point | Drag the handle (hold <kbd>Shift</kbd> to snap) |
-| Add a point | Double-click the gradient, or **+ Add** |
+| Add a point | Double-click the gradient, use the **Node** tool (<kbd>N</kbd>) and click, or **+ Add**. New points take the colour under the cursor |
+| Expand a point's area | Select the point, then drag the curved grip on its dashed circle |
+| Stretch a point's colour | Select a point and drag its four arms; a longer arm pushes the colour further that way |
+| Draw a line / arc | **Line** (<kbd>L</kbd>) or **Arc** (<kbd>A</kbd>) tool, then drag across the gradient. Drag the ends to reshape; drag an arc's colour point to bend it |
+| Freehand | **Pencil** (<kbd>P</kbd>): your stroke is fitted to a line or an arc |
+| Shuffle / scatter | <kbd>X</kbd> shuffles colours, <kbd>R</kbd> scatters points |
+| Hide handles | <kbd>H</kbd> or the eye button |
+| Back to Select | <kbd>V</kbd> or <kbd>Esc</kbd> |
 | Remove a point | Select it and press <kbd>Delete</kbd>, or use the bin icon |
 | Undo / redo | <kbd>⌘/Ctrl</kbd>+<kbd>Z</kbd> / <kbd>⌘/Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> |
 | Save | **Save** or <kbd>⌘/Ctrl</kbd>+<kbd>S</kbd> |
@@ -191,7 +198,13 @@ Saving writes only the gradients file. Vite's HMR is told to skip that file, so 
 }
 ```
 
-`x`/`y` are relative to the element (0–1). Colours blend in OKLab, which keeps transitions vivid instead of muddy. Everything except the points is a 0–1 value. `speed > 0` animates the gradient, and animation pauses when the gradient is off-screen or the user prefers reduced motion.
+`x`/`y` are relative to the element (0–1). Points can also carry optional fields, which the editor writes for you:
+
+- `radius`: how far the colour reaches, as a multiple of the default (`1`).
+- `arms`: four `[dx, dy]` direction handles (in units of √(width × height)) that stretch the colour's reach.
+- `shape`: `{ "type": "line" | "arc", "a": {x, y}, "b": {x, y} }` makes the colour follow a segment from `a` to `b`, or an arc from `a` through the point to `b`.
+
+ Colours blend in OKLab, which keeps transitions vivid instead of muddy. Everything except the points is a 0–1 value. `speed > 0` animates the gradient, and animation pauses when the gradient is off-screen or the user prefers reduced motion.
 
 ## Runtime API
 

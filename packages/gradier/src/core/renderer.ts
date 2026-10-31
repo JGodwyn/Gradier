@@ -1,4 +1,5 @@
-import { hexToRgb, MAX_POINTS, type Gradient } from './types';
+import { arcThrough } from './geometry';
+import { ARM_LENGTH, hexToRgb, MAX_POINTS, type Gradient } from './types';
 
 const VERT = `
 attribute vec2 a_pos;
@@ -17,6 +18,13 @@ uniform float u_time;
 uniform int u_count;
 uniform vec2 u_pos[${MAX_POINTS}];
 uniform vec3 u_col[${MAX_POINTS}];
+// x: kind (0 point, 1 line, 2 arc), y: radius multiplier, z: arc sweep
+uniform vec3 u_meta[${MAX_POINTS}];
+// line: (ax, ay, bx, by) in uv; arc: (cx, cy, r, start) in aspect-corrected space
+uniform vec4 u_shape[${MAX_POINTS}];
+// arm angles (sorted ascending, [0, 2pi)) and lengths
+uniform vec4 u_armAng[${MAX_POINTS}];
+uniform vec4 u_armLen[${MAX_POINTS}];
 uniform float u_power;
 uniform float u_warp;
 uniform float u_warpScale;
@@ -44,6 +52,46 @@ float snoise(vec2 v) {
   g.x = a0.x * x0.x + h.x * x0.y;
   g.yz = a0.yz * x12.xz + h.yz * x12.yw;
   return 130.0 * dot(m, g);
+}
+
+const float TAU = 6.28318530718;
+const float ARM0 = ${ARM_LENGTH.toFixed(4)};
+
+// Reach scale for direction d inside the cone between two neighbouring arms (angles a0 < a1, lengths l0, l1).
+// Expresses d in the basis of the two arm vectors, so perpendicular arms give an exact ellipse.
+float coneScale(vec2 d, float a0, float a1, float l0, float l1) {
+  vec2 A = l0 * vec2(cos(a0), sin(a0));
+  vec2 B = l1 * vec2(cos(a1), sin(a1));
+  float det = A.x * B.y - A.y * B.x;
+  if (abs(det) < 1e-6 * l0 * l1 || a1 - a0 > 3.05) {
+    // Arms (nearly) opposite: blend the lengths by angle instead.
+    float th = atan(d.y, d.x);
+    if (th < a0) th += TAU;
+    float t = clamp((th - a0) / max(a1 - a0, 1e-4), 0.0, 1.0);
+    return ARM0 / max(mix(l0, l1, t * t * (3.0 - 2.0 * t)), 1e-3);
+  }
+  float s = (d.x * B.y - d.y * B.x) / det;
+  float t = (A.x * d.y - A.y * d.x) / det;
+  return length(vec2(s, t)) * ARM0 / length(d);
+}
+
+// How much the distance in direction d is scaled by the point's four arms (1.0 for the default cross).
+float armScale(vec2 d, vec4 a, vec4 l) {
+  if (dot(d, d) < 1e-12) return 1.0;
+  float th = atan(d.y, d.x);
+  if (th < 0.0) th += TAU;
+  if (th < a.x) th += TAU;
+  if (th < a.y) return coneScale(d, a.x, a.y, l.x, l.y);
+  if (th < a.z) return coneScale(d, a.y, a.z, l.y, l.z);
+  if (th < a.w) return coneScale(d, a.z, a.w, l.z, l.w);
+  return coneScale(d, a.w, a.x + TAU, l.w, l.x);
+}
+
+// Offset from the nearest point of the segment a-b to q.
+vec2 toSegment(vec2 q, vec2 a, vec2 b) {
+  vec2 ab = b - a;
+  float t = clamp(dot(q - a, ab) / max(dot(ab, ab), 1e-9), 0.0, 1.0);
+  return q - (a + ab * t);
 }
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
@@ -76,8 +124,29 @@ void main() {
   float total = 0.0;
   for (int i = 0; i < ${MAX_POINTS}; i++) {
     if (i >= u_count) break;
-    vec2 d = (uv - u_pos[i]) * scale;
-    float w = pow(dot(d, d) + 1e-5, -u_power * 0.5);
+    vec3 meta = u_meta[i];
+    vec4 sh = u_shape[i];
+    vec2 q = uv * scale;
+    vec2 d;
+    if (meta.x < 0.5) {
+      d = q - u_pos[i] * scale;
+    } else if (meta.x < 1.5) {
+      d = toSegment(q, sh.xy * scale, sh.zw * scale);
+    } else {
+      vec2 v = q - sh.xy;
+      float ang = atan(v.y, v.x);
+      float rel = mod(ang - sh.w, TAU);
+      if (rel <= meta.z) {
+        d = v - normalize(v + 1e-9) * sh.z;
+      } else {
+        vec2 a = sh.xy + sh.z * vec2(cos(sh.w), sin(sh.w));
+        vec2 b = sh.xy + sh.z * vec2(cos(sh.w + meta.z), sin(sh.w + meta.z));
+        vec2 da = q - a, db = q - b;
+        d = dot(da, da) < dot(db, db) ? da : db;
+      }
+    }
+    float dist = length(d) * armScale(d, u_armAng[i], u_armLen[i]) / meta.y;
+    float w = pow(dist * dist + 1e-5, -u_power * 0.5);
     sum += u_col[i] * w;
     total += w;
   }
@@ -86,6 +155,13 @@ void main() {
   col += r * (u_grain * 0.35 + 1.5 / 255.0);
   gl_FragColor = vec4(col, 1.0);
 }`;
+
+const DEFAULT_ARMS: Array<[number, number]> = [
+  [ARM_LENGTH, 0],
+  [0, ARM_LENGTH],
+  [-ARM_LENGTH, 0],
+  [0, -ARM_LENGTH],
+];
 
 function srgbToOklab(hex: string): [number, number, number] {
   const lin = hexToRgb(hex).map((v) => {
@@ -146,7 +222,7 @@ export class MeshRenderer {
     gl.enableVertexAttribArray(loc);
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
 
-    for (const name of ['u_res', 'u_time', 'u_count', 'u_pos', 'u_col', 'u_power', 'u_warp', 'u_warpScale', 'u_grain']) {
+    for (const name of ['u_res', 'u_time', 'u_count', 'u_pos', 'u_col', 'u_meta', 'u_shape', 'u_armAng', 'u_armLen', 'u_power', 'u_warp', 'u_warpScale', 'u_grain']) {
       this.uniforms[name] = gl.getUniformLocation(p, name);
     }
   }
@@ -169,18 +245,53 @@ export class MeshRenderer {
     const count = Math.min(g.points.length, MAX_POINTS);
     const pos = new Float32Array(MAX_POINTS * 2);
     const col = new Float32Array(MAX_POINTS * 3);
+    const meta = new Float32Array(MAX_POINTS * 3);
+    const shape = new Float32Array(MAX_POINTS * 4);
+    const armAng = new Float32Array(MAX_POINTS * 4);
+    const armLen = new Float32Array(MAX_POINTS * 4).fill(ARM_LENGTH);
     const t = this.time;
     const drift = g.speed > 0 ? 0.06 : 0;
+    const aspect = (canvas.width || 1) / (canvas.height || 1);
+    const sx = Math.sqrt(aspect);
+    const sy = 1 / sx;
     g.points.slice(0, count).forEach((pt, i) => {
-      pos[i * 2] = pt.x + drift * Math.sin(t * 0.6 + i * 1.7);
-      pos[i * 2 + 1] = pt.y + drift * Math.cos(t * 0.5 + i * 2.3);
+      const dx = drift * Math.sin(t * 0.6 + i * 1.7);
+      const dy = drift * Math.cos(t * 0.5 + i * 2.3);
+      pos[i * 2] = pt.x + dx;
+      pos[i * 2 + 1] = pt.y + dy;
       col.set(srgbToOklab(pt.color), i * 3);
+      meta[i * 3 + 1] = pt.radius ?? 1;
+      if (pt.shape) {
+        const a = { x: (pt.shape.a.x + dx) * sx, y: (pt.shape.a.y + dy) * sy };
+        const b = { x: (pt.shape.b.x + dx) * sx, y: (pt.shape.b.y + dy) * sy };
+        const arc = pt.shape.type === 'arc' ? arcThrough(a, { x: pos[i * 2]! * sx, y: pos[i * 2 + 1]! * sy }, b) : null;
+        if (arc) {
+          meta[i * 3] = 2;
+          meta[i * 3 + 2] = arc.sweep;
+          shape.set([arc.cx, arc.cy, arc.r, arc.start], i * 4);
+        } else {
+          meta[i * 3] = 1;
+          shape.set([pt.shape.a.x + dx, pt.shape.a.y + dy, pt.shape.b.x + dx, pt.shape.b.y + dy], i * 4);
+        }
+      }
+      // Arms sorted by angle so the shader can interpolate between neighbours.
+      const arms = (pt.arms ?? DEFAULT_ARMS)
+        .map(([ax, ay]) => ({ ang: (Math.atan2(ay, ax) + Math.PI * 2) % (Math.PI * 2), len: Math.max(Math.hypot(ax, ay), 0.005) }))
+        .sort((p, q) => p.ang - q.ang);
+      arms.forEach((arm, k) => {
+        armAng[i * 4 + k] = arm.ang;
+        armLen[i * 4 + k] = arm.len;
+      });
     });
     gl.uniform2f(u.u_res!, canvas.width || 1, canvas.height || 1);
     gl.uniform1f(u.u_time!, t);
     gl.uniform1i(u.u_count!, count);
     gl.uniform2fv(u.u_pos!, pos);
     gl.uniform3fv(u.u_col!, col);
+    gl.uniform3fv(u.u_meta!, meta);
+    gl.uniform4fv(u.u_shape!, shape);
+    gl.uniform4fv(u.u_armAng!, armAng);
+    gl.uniform4fv(u.u_armLen!, armLen);
     gl.uniform1f(u.u_power!, 1.5 + g.softness * 4.5);
     gl.uniform1f(u.u_warp!, g.warp);
     gl.uniform1f(u.u_warpScale!, g.warpScale);

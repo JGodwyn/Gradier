@@ -1,9 +1,35 @@
+/** A position relative (0–1) to the element box. */
+export interface RelPoint {
+  x: number;
+  y: number;
+}
+
+/**
+ * Makes a point's colour follow a curve instead of radiating from a single spot.
+ * - `line`: a straight segment from `a` to `b`; the point's `x`/`y` is kept at its midpoint.
+ * - `arc`: a circular arc from `a` through the point's `x`/`y` to `b`.
+ */
+export interface PointShape {
+  type: 'line' | 'arc';
+  a: RelPoint;
+  b: RelPoint;
+}
+
 /** A single colour stop in a mesh gradient. Coordinates are relative (0–1) to the element box. */
 export interface GradientPoint {
   x: number;
   y: number;
   /** Hex colour, e.g. `#ff6b6b`. */
   color: string;
+  /** How far the colour reaches, as a multiple of the default (1). Omitted when 1. */
+  radius?: number;
+  /**
+   * Four direction handles that stretch or squash the colour's reach, as `[dx, dy]` offsets in units of
+   * √(width × height) of the element. A longer arm pushes the colour further that way. Omitted when default.
+   */
+  arms?: Array<[number, number]>;
+  /** Optional curve the colour follows. */
+  shape?: PointShape;
 }
 
 export interface Gradient {
@@ -23,6 +49,32 @@ export interface Gradient {
 export type GradientMap = Record<string, Gradient>;
 
 export const MAX_POINTS = 12;
+
+/** Default arm length (in √(w×h) units). An arm of this length leaves the reach in its direction unchanged. */
+export const ARM_LENGTH = 0.07;
+/** On-screen radius of a point's area at `radius: 1`, in √(w×h) units. */
+export const AREA_RADIUS = 0.14;
+export const MIN_RADIUS = 0.2;
+export const MAX_RADIUS = 5;
+
+export const defaultArms = (): Array<[number, number]> => [
+  [ARM_LENGTH, 0],
+  [0, ARM_LENGTH],
+  [-ARM_LENGTH, 0],
+  [0, -ARM_LENGTH],
+];
+
+/** Move a point (and its curve, if any) by an offset. */
+export function translatePoint(p: GradientPoint, dx: number, dy: number): void {
+  p.x += dx;
+  p.y += dy;
+  if (p.shape) {
+    p.shape.a.x += dx;
+    p.shape.a.y += dy;
+    p.shape.b.x += dx;
+    p.shape.b.y += dy;
+  }
+}
 
 export const DEFAULTS: Omit<Gradient, 'points'> = {
   softness: 0.5,
@@ -53,9 +105,22 @@ export function normalizeGradient(input: unknown): Gradient {
   const rawPoints = Array.isArray(g.points) ? g.points : [];
   const points = rawPoints.slice(0, MAX_POINTS).flatMap((p): GradientPoint[] => {
     if (!p || typeof p !== 'object') return [];
-    const { x, y, color } = p as Record<string, unknown>;
+    const { x, y, color, radius, arms, shape } = p as Record<string, unknown>;
     if (typeof color !== 'string' || !HEX_RE.test(normalizeHex(color))) return [];
-    return [{ x: round(num(x, 0.5, -0.5, 1.5)), y: round(num(y, 0.5, -0.5, 1.5)), color: normalizeHex(color) }];
+    const out: GradientPoint = { x: coord(x), y: coord(y), color: normalizeHex(color) };
+    const r = round(num(radius, 1, MIN_RADIUS, MAX_RADIUS));
+    if (r !== 1) out.radius = r;
+    const a = normalizeArms(arms);
+    if (a) out.arms = a;
+    const sh = normalizeShape(shape);
+    if (sh) {
+      out.shape = sh;
+      if (sh.type === 'line') {
+        out.x = round((sh.a.x + sh.b.x) / 2);
+        out.y = round((sh.a.y + sh.b.y) / 2);
+      }
+    }
+    return [out];
   });
   return {
     points: points.length ? points : randomGradient().points,
@@ -65,6 +130,35 @@ export function normalizeGradient(input: unknown): Gradient {
     grain: round(num(g.grain, DEFAULTS.grain, 0, 1)),
     speed: round(num(g.speed, DEFAULTS.speed, 0, 1)),
   };
+}
+
+const coord = (v: unknown) => round(num(v, 0.5, -0.5, 1.5));
+
+function normalizeArms(input: unknown): Array<[number, number]> | undefined {
+  if (!Array.isArray(input) || input.length !== 4) return undefined;
+  const arms = input.map((arm): [number, number] => {
+    const [dx, dy] = Array.isArray(arm) ? arm : [];
+    let x = round(num(dx, 0, -1.5, 1.5));
+    let y = round(num(dy, 0, -1.5, 1.5));
+    if (Math.hypot(x, y) < 0.005) [x, y] = [0.005, 0];
+    return [x, y];
+  });
+  const def = defaultArms();
+  return arms.every((a, i) => a[0] === def[i]![0] && a[1] === def[i]![1]) ? undefined : arms;
+}
+
+function normalizeShape(input: unknown): PointShape | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const { type, a, b } = input as Record<string, unknown>;
+  if (type !== 'line' && type !== 'arc') return undefined;
+  const pt = (v: unknown): RelPoint | undefined => {
+    if (!v || typeof v !== 'object') return undefined;
+    const { x, y } = v as Record<string, unknown>;
+    return typeof x === 'number' && typeof y === 'number' ? { x: coord(x), y: coord(y) } : undefined;
+  };
+  const pa = pt(a);
+  const pb = pt(b);
+  return pa && pb ? { type, a: pa, b: pb } : undefined;
 }
 
 export function isValidName(name: unknown): name is string {
