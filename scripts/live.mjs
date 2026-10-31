@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Keeps your local copy in sync with GitHub while you test.
 //
-//   npm run live            pull main every 15s, rebuild when needed, and run the example (restarting it after updates)
+//   npm run live            build, then pull main every 15s, rebuild when needed, and run the example (restarting it after updates)
 //   npm run sync            the same, without running the example
 //
 // Options: --interval <seconds>  --example <workspace dir under examples/>  --once
@@ -110,7 +110,9 @@ function tick() {
   }
 }
 
-if (!existsSync(path.join(root, 'packages', 'gradier', 'dist', 'overlay.js'))) build();
+// Always build on startup: the code may have changed since the last build (e.g. after a manual
+// `git pull`), and the tick below only rebuilds when it pulls something new itself.
+build();
 tick();
 if (once) process.exit(0);
 if (runExample) startExample();
