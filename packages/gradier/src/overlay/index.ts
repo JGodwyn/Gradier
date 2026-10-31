@@ -2,7 +2,10 @@ import { gradientToCSS } from '../core/css';
 import { defineGradientElement } from '../core/element';
 import { getGradient, getGradients, mountedElements, registerGradients, removeGradient, setGradient, subscribe } from '../core/store';
 import { isValidName, MAX_POINTS, normalizeGradient, normalizeHex, PRESETS, randomGradient, type Gradient } from '../core/types';
+import { createCssEditor } from './css-editor';
 import { h } from './dom';
+import { ICONS } from './icons';
+import { startPicker } from './picker';
 import { STYLES } from './styles';
 
 declare global {
@@ -11,15 +14,6 @@ declare global {
   }
 }
 
-const ICONS = {
-  plus: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>',
-  close: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
-  trash: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.7 8.5h5.6l.7-8.5"/></svg>',
-  edit: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 3.5l2 2L6 12H4v-2z"/></svg>',
-  undo: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4L2.5 6.5 5 9"/><path d="M2.5 6.5H10a3.5 3.5 0 010 7H7"/></svg>',
-  redo: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4l2.5 2.5L11 9"/><path d="M13.5 6.5H6a3.5 3.5 0 000 7h3"/></svg>',
-  dock: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="M9.5 3v10"/></svg>',
-};
 
 const SLIDERS: Array<{ key: keyof Omit<Gradient, 'points'>; label: string }> = [
   { key: 'softness', label: 'Softness' },
@@ -30,7 +24,8 @@ const SLIDERS: Array<{ key: keyof Omit<Gradient, 'points'>; label: string }> = [
 ];
 
 const script = document.currentScript as HTMLScriptElement | null;
-const API = new URL('api', script?.src ? new URL('.', script.src) : new URL('/__gradier/', location.href)).toString();
+const BASE = (script?.src ? new URL('.', script.src) : new URL('/__gradier/', location.href)).toString();
+const API = `${BASE}api`;
 
 const canon = (g: Gradient) => JSON.stringify(normalizeGradient(g));
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
@@ -64,7 +59,9 @@ function boot() {
     connected: false,
     loaded: false,
     saving: false,
+    mode: 'mesh' as 'mesh' | 'css',
   };
+  let cancelPick: (() => void) | null = null;
   const history = new Map<string, { undo: string[]; redo: string[]; key?: string; at: number }>();
 
   // ---------- DOM scaffolding ----------
@@ -114,6 +111,51 @@ function boot() {
       window.prompt(`Copy ${what}:`, text);
     }
   };
+
+  const button = (cls: string, icon: string, title: string, onclick: () => void) => {
+    const b = h('button', { className: `btn ${cls}`, title, type: 'button', onclick });
+    b.innerHTML = icon;
+    return b;
+  };
+
+  const css = createCssEditor({
+    api: BASE,
+    host,
+    stage,
+    shadow,
+    toast,
+    copy: (text, what) => void copy(text, what),
+    button,
+    render: () => render(),
+    pick: () => pick(),
+    back: () => {
+      if (css.close()) state.mode = 'mesh';
+      render();
+    },
+  });
+
+  /** Enter pick mode: the next click on the page chooses which gradient to edit. */
+  const pick = () => {
+    if (cancelPick) return;
+    if (!state.open) setOpen(true);
+    cancelPick = startPicker(stage, host, (result) => {
+      cancelPick = null;
+      if (!result) return render();
+      if (result.kind === 'mesh') {
+        if (!css.close()) return render();
+        state.mode = 'mesh';
+        if (!getGradient(result.name)) create(result.name);
+        else select(result.name, result.el);
+        return;
+      }
+      if (!css.close()) return render();
+      state.mode = 'css';
+      css.open(result);
+    });
+    render();
+  };
+
+  const isDirty = () => changes().count > 0 || css.dirty;
 
   const namedElements = () =>
     [...mountedElements()].filter((el) => el.isConnected && el.getAttribute('name')) as HTMLElement[];
@@ -307,11 +349,6 @@ function boot() {
   };
 
   // ---------- panel ----------
-  const button = (cls: string, icon: string, title: string, onclick: () => void) => {
-    const b = h('button', { className: `btn ${cls}`, title, type: 'button', onclick });
-    b.innerHTML = icon;
-    return b;
-  };
 
   const buildPanel = (g: Gradient | undefined) => {
     refs = { rows: [], swatches: [], hexes: [], coords: [], sliders: new Map() };
@@ -322,7 +359,14 @@ function boot() {
       'div',
       { className: 'head' },
       h('span', { className: 'logo' }),
-      h('span', { className: 'title' }, 'Gradier'),
+      state.mode === 'css' && Object.keys(getGradients()).length
+        ? button('icon ghost', ICONS.back, 'Back to mesh gradients', () => {
+            if (css.close()) state.mode = 'mesh';
+            render();
+          })
+        : null,
+      h('span', { className: 'title' }, state.mode === 'css' ? 'CSS gradient' : 'Gradier'),
+      button(`icon ghost${cancelPick ? ' on' : ''}`, ICONS.pick, 'Pick any gradient on the page (Alt+P)', pick),
       button('icon ghost', ICONS.dock, 'Move panel to other side', () => {
         state.dock = state.dock === 'right' ? 'left' : 'right';
         storage('gradier:dock', state.dock);
@@ -330,6 +374,11 @@ function boot() {
       }),
       button('icon ghost', ICONS.close, 'Close (Alt+G)', () => setOpen(false)),
     );
+
+    if (state.mode === 'css') {
+      const { body, foot } = css.build();
+      return h('div', { className: `panel${state.dock === 'left' ? ' left' : ''}` }, head, body, foot);
+    }
 
     const body = h('div', { className: 'body' });
 
@@ -374,9 +423,11 @@ function boot() {
         h(
           'div',
           { className: 'section' },
-          h('div', { className: 'hint' }, 'Add an element to your page, then create a gradient with the same name:'),
+          h('div', { className: 'hint' }, 'Edit any CSS gradient already on this page:'),
+          h('button', { className: 'btn primary', type: 'button', onclick: pick }, 'Pick a gradient on the page'),
+          h('div', { className: 'hint' }, 'Or add a mesh gradient: put this in your markup, then create a gradient with the same name.'),
           h('div', { className: 'code' }, '<gradier-gradient name="hero"></gradier-gradient>'),
-          h('button', { className: 'btn primary', type: 'button', onclick: () => create() }, 'Create gradient'),
+          h('button', { className: 'btn', type: 'button', onclick: () => create() }, 'Create mesh gradient'),
         ),
       );
     } else {
@@ -472,7 +523,7 @@ function boot() {
           h(
             'div',
             { className: 'row' },
-            h('button', { className: 'btn grow', type: 'button', onclick: () => update((d) => ({ ...randomGradient(d.points.length), ...pick(d) })) }, 'Randomize'),
+            h('button', { className: 'btn grow', type: 'button', onclick: () => update((d) => ({ ...randomGradient(d.points.length), ...blendOf(d) })) }, 'Randomize'),
             h(
               'button',
               {
@@ -558,8 +609,11 @@ function boot() {
   };
 
   const render = () => {
-    const { count } = changes();
+    const count = changes().count + (css.dirty ? 1 : 0);
     if (!state.open) {
+      cancelPick?.();
+      cancelPick = null;
+      css.clearStage();
       panel?.remove();
       panel = null;
       structure = '';
@@ -576,9 +630,13 @@ function boot() {
     }
     launcher?.remove();
     launcher = null;
+    if (state.mode === 'css' && !css.active) state.mode = 'mesh';
     ensureSelection();
     const g = state.selected ? getGradient(state.selected) : undefined;
     const key = [
+      state.mode,
+      !!cancelPick,
+      state.mode === 'css' ? css.structureKey() : '',
       state.selected,
       state.dock,
       state.connected,
@@ -596,7 +654,8 @@ function boot() {
       panel = next;
       panel.querySelector('.body')!.scrollTop = scroll;
     }
-    patch(g);
+    if (state.mode === 'css') css.patch();
+    else patch(g);
   };
 
   let frame = 0;
@@ -612,6 +671,14 @@ function boot() {
 
   const positionStage = () => {
     if (!state.open) return;
+    if (state.mode === 'css') {
+      for (const o of overlays.values()) o.frame.remove(), o.chip.remove();
+      overlays.clear();
+      while (handles.length) handles.pop()!.remove();
+      css.positionStage();
+      return;
+    }
+    css.clearStage();
     const els = namedElements();
     const selected = state.selected;
     if (!state.target?.isConnected || state.target.getAttribute('name') !== selected) {
@@ -714,7 +781,7 @@ function boot() {
   window.addEventListener(
     'dblclick',
     (e) => {
-      if (!state.open) return;
+      if (!state.open || state.mode !== 'mesh' || cancelPick) return;
       const path = e.composedPath();
       if (path.includes(host)) return;
       const el = namedElements().find((x) => path.includes(x));
@@ -737,9 +804,28 @@ function boot() {
         e.preventDefault();
         return setOpen(!state.open);
       }
-      if (!state.open) return;
+      if (e.altKey && e.code === 'KeyP') {
+        e.preventDefault();
+        return pick();
+      }
+      if (!state.open || cancelPick) return;
       const target = e.composedPath()[0];
       const mod = isMac ? e.metaKey : e.ctrlKey;
+      if (state.mode === 'css') {
+        if (mod && e.key.toLowerCase() === 's') {
+          e.preventDefault();
+          void css.save();
+        } else if (mod && (e.key.toLowerCase() === 'z' || e.key.toLowerCase() === 'y') && !isTextField(target)) {
+          e.preventDefault();
+          css.undo(e.shiftKey || e.key.toLowerCase() === 'y');
+        } else if ((e.key === 'Delete' || e.key === 'Backspace') && css.selectedStop !== null && !isTextField(target)) {
+          e.preventDefault();
+          css.removeSelectedStop();
+        } else if (e.key === 'Escape' && !isTextField(target)) {
+          if (!css.deselect()) setOpen(false);
+        }
+        return;
+      }
       if (mod && e.key.toLowerCase() === 's') {
         e.preventDefault();
         void save();
@@ -763,7 +849,7 @@ function boot() {
   );
 
   window.addEventListener('beforeunload', (e) => {
-    if (changes().count) e.preventDefault();
+    if (isDirty()) e.preventDefault();
   });
 
   subscribe(scheduleRender);
@@ -773,7 +859,7 @@ function boot() {
 }
 
 /** Keep the user's blend settings when randomising colours/positions. */
-function pick(g: Gradient) {
+function blendOf(g: Gradient) {
   const { softness, warp, warpScale, grain, speed } = g;
   return { softness, warp, warpScale, grain, speed };
 }

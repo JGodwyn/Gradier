@@ -5,3 +5,32 @@ body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; background:
 .hero p { font-size: 18px; opacity: 0.85; margin: 0; }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; padding: 32px 16px; max-width: 1000px; margin: 0 auto; }
 .card { height: 220px; border-radius: 20px; padding: 20px; display: flex; align-items: flex-end; font-weight: 600; }
+
+/* Plain CSS gradients – pick any of these with the Gradier picker (Alt+P) */
+.plain { padding: 32px 16px; max-width: 1000px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.button-grad {
+  height: 120px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  background: linear-gradient(135deg, #ff0080 0%, #7928ca 100%);
+}
+.glow { position: relative; height: 120px; border-radius: 16px; overflow: hidden; display: grid; place-items: center; background: #111; }
+.glow::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-image: radial-gradient(circle at 30% 20%, rgba(34, 211, 238, 0.8), transparent 60%);
+}
+.glow span { position: relative; }
+.stacked {
+  height: 120px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background:
+    linear-gradient(to right, rgba(255, 255, 255, 0.15), transparent),
+    conic-gradient(from 90deg at 50% 50%, orange, gold, tomato, orange);
+}

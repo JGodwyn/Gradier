@@ -4,6 +4,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isValidName, normalizeGradient, type GradientMap } from '../core/types';
+import { findInSource, replaceInSource, SourceError, type FindRequest, type ReplaceEdit } from './source';
+
+export { findInSource, replaceInSource, type FindRequest, type ReplaceEdit, type SourceMatch } from './source';
 
 export const BASE_PATH = '/__gradier';
 export const DEFAULT_FILE = 'src/gradients.json';
@@ -152,32 +155,45 @@ export function createGradierMiddleware(options: GradierServerOptions = {}): Mid
 
     const route = url.pathname.slice(BASE_PATH.length);
     const handle = async () => {
-      if (route === '/overlay.js' && req.method === 'GET') {
+      if (route === '/overlay.js' && (req.method === 'GET' || req.method === 'HEAD')) {
         const src = await readFile(overlayPath(), 'utf8');
         return send(res, 200, src, 'text/javascript; charset=utf-8');
       }
-      if (route === '/api' && req.method === 'GET') {
+      if (route === '/api' && (req.method === 'GET' || req.method === 'HEAD')) {
         return send(res, 200, { file: path.relative(root, file), gradients: await readGradients(file) });
       }
-      if (route === '/api' && req.method === 'POST') {
+      if (req.method === 'POST' && (route === '/api' || route.startsWith('/css/'))) {
         if (!String(req.headers['content-type']).includes('application/json')) {
           throw new HttpError(415, 'Expected application/json');
         }
-        let body: SaveRequest;
+        let body: unknown;
         try {
-          body = JSON.parse(await readBody(req)) as SaveRequest;
+          body = JSON.parse(await readBody(req));
         } catch {
           throw new HttpError(400, 'Invalid JSON');
         }
         // Serialise writes so concurrent saves can't clobber each other.
-        const result = (queue = queue.catch(() => {}).then(() => applySave(file, body)));
-        const gradients = await result;
-        return send(res, 200, { file: path.relative(root, file), gradients });
+        const serial = <T>(fn: () => Promise<T>): Promise<T> => {
+          const result = queue.catch(() => {}).then(fn);
+          queue = result;
+          return result;
+        };
+        if (route === '/api') {
+          const gradients = await serial(() => applySave(file, body as SaveRequest));
+          return send(res, 200, { file: path.relative(root, file), gradients });
+        }
+        if (route === '/css/find') {
+          return send(res, 200, { matches: await findInSource(root, body as FindRequest) });
+        }
+        if (route === '/css/replace') {
+          const edits = (body as { edits: ReplaceEdit[] }).edits;
+          return send(res, 200, { results: await serial(() => replaceInSource(root, edits)) });
+        }
       }
       send(res, 404, { error: 'Not found' });
     };
     handle().catch((err: unknown) => {
-      const status = err instanceof HttpError ? err.status : 500;
+      const status = err instanceof HttpError || err instanceof SourceError ? err.status : 500;
       if (status === 500) console.error('[gradier]', err);
       send(res, status, { error: err instanceof Error ? err.message : String(err) });
     });

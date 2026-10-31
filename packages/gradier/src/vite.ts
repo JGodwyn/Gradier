@@ -3,7 +3,10 @@ import { fileURLToPath } from 'node:url';
 import type { Plugin } from 'vite';
 import { BASE_PATH, createGradierMiddleware, resolveGradientsFile, type GradierServerOptions } from './server/index';
 
-export interface GradierPluginOptions extends Omit<GradierServerOptions, 'root'> {}
+export interface GradierPluginOptions extends GradierServerOptions {
+  /** Directory to scan for gradients and write to, relative to Vite's root. Defaults to Vite's root. */
+  root?: string;
+}
 
 const OVERLAY_SRC = `${BASE_PATH}/overlay.js`;
 
@@ -15,6 +18,7 @@ export default function gradier(options: GradierPluginOptions = {}): Plugin {
   const dist = path.dirname(fileURLToPath(import.meta.url));
   const runtimeEntries = new Set([path.resolve(dist, 'index.js'), path.resolve(dist, 'react.js')]);
   let file = '';
+  let root = '';
 
   return {
     name: 'gradier',
@@ -24,10 +28,11 @@ export default function gradier(options: GradierPluginOptions = {}): Plugin {
       return { optimizeDeps: { exclude: ['gradier'] } };
     },
     configResolved(config) {
-      file = resolveGradientsFile({ ...options, root: config.root });
+      root = path.resolve(config.root, options.root ?? '.');
+      file = resolveGradientsFile({ ...options, root });
     },
     configureServer(server) {
-      server.middlewares.use(createGradierMiddleware({ ...options, root: server.config.root }));
+      server.middlewares.use(createGradierMiddleware({ ...options, root }));
     },
     transformIndexHtml() {
       return [{ tag: 'script', attrs: { src: OVERLAY_SRC, defer: true }, injectTo: 'body' }];

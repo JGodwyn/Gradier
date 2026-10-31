@@ -106,4 +106,31 @@ kbd { font: 10px ui-monospace, monospace; padding: 1px 4px; border-radius: 4px; 
   box-shadow: 0 8px 24px rgba(0,0,0,.3); opacity: 0; transform: translate(-50%, -6px); transition: opacity .15s, transform .15s; pointer-events: none; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .toast.error { background: #ef4444; color: #fff; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hint.warn { color: var(--warn); }
+.btn.on { background: var(--accent); color: #fff; }
+.check { display: flex; align-items: center; gap: 6px; color: var(--muted); cursor: pointer; }
+.check input { accent-color: var(--accent); margin: 0; }
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); background: var(--field); border: 1px solid var(--line); border-radius: 8px; padding: 2px; }
+.seg button { height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); }
+.seg button.on { background: rgba(255,255,255,.14); color: var(--fg); font-weight: 600; }
+.point .text.pos { width: 64px; flex: none; }
+.bar { position: relative; height: 26px; border-radius: 7px; border: 1px solid var(--line); cursor: copy; margin: 4px 0 6px; }
+.marker { position: absolute; top: 50%; width: 14px; height: 30px; margin: -15px 0 0 -7px; border-radius: 5px; border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.35), 0 2px 6px rgba(0,0,0,.4); cursor: ew-resize; touch-action: none; }
+.marker.active { box-shadow: 0 0 0 2px var(--accent), 0 2px 8px rgba(0,0,0,.5); }
+
+.shield { position: fixed; inset: 0; pointer-events: auto; cursor: crosshair; }
+.pick-box { position: fixed; display: none; pointer-events: none; border: 2px solid var(--accent); background: rgba(139, 92, 246, .08); border-radius: 2px; }
+.pick-label { position: fixed; display: none; pointer-events: none; height: 22px; line-height: 22px; padding: 0 8px; border-radius: 6px; background: var(--accent); color: #fff;
+  font: 600 11px/22px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
+.pick-tip { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); pointer-events: none; padding: 8px 14px; border-radius: 999px;
+  background: var(--bg); border: 1px solid var(--line); color: var(--fg); font-weight: 600; box-shadow: 0 8px 30px rgba(0,0,0,.35); }
+.chip.static { pointer-events: none; background: var(--accent); }
+.rotor-line { position: fixed; height: 2px; margin-top: -1px; background: #fff; transform-origin: 0 50%; pointer-events: none; box-shadow: 0 0 0 1px rgba(0,0,0,.25); }
+.rotor, .center-handle { position: fixed; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%; pointer-events: auto; cursor: grab; touch-action: none;
+  border: 2.5px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.3), 0 4px 12px rgba(0,0,0,.35); }
+.rotor { background: var(--accent); }
+.center-handle { background: #18181b; width: 22px; height: 22px; margin: -11px 0 0 -11px; }
 `;

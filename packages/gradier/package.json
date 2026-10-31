@@ -35,7 +35,8 @@
   "scripts": {
     "build": "node scripts/build.mjs && tsc -p tsconfig.json --emitDeclarationOnly",
     "dev": "node scripts/build.mjs --watch",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node scripts/test.mjs"
   },
   "peerDependencies": {
     "react": ">=18",

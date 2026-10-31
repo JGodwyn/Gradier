@@ -1,17 +1,23 @@
 # Gradier
 
-Edit mesh gradients **live on your own site** during development, then save them straight back into your codebase.
+Point at **any gradient on your running site**, edit it visually, and save the change straight back into your source code. It's a development tool and never ships to production.
 
-- Drop `<gradier-gradient name="hero">` anywhere (it works in HTML, React, Vue, Svelte, and anything else that renders HTML).
-- Run your dev server. A **Gradier** button appears bottom-right (or press <kbd>Alt</kbd>+<kbd>G</kbd>).
-- Drag colour points on the page, tweak softness, warp, grain and motion, or pick a preset.
-- Hit **Save** (<kbd>⌘/Ctrl</kbd>+<kbd>S</kbd>). Your gradients are written to `src/gradients.json`. Commit that file.
+**Edit existing CSS gradients.** Press <kbd>Alt</kbd>+<kbd>P</kbd> (or the crosshair button) and click any gradient on the page: `linear-`, `radial-`, `conic-` or `repeating-*`, on an element or its `::before`/`::after`, in any layer of a multi-layer background. Then:
+- drag colour stops on a gradient bar, click it to add stops, and change colours, opacity and positions,
+- switch between linear, radial and conic, rotate the angle with an on-page handle, or drag the centre of a radial or conic gradient,
+- see every change live on the page,
+- hit **Save** (<kbd>⌘/Ctrl</kbd>+<kbd>S</kbd>).
 
-The editor only runs in development. In production you ship the small runtime (a WebGL renderer with a CSS fallback) and the JSON file.
+Gradier finds where that gradient is written in your project, whether a CSS/SCSS/Less file, a CSS Module, a `<style>` block, an HTML `style=""`, a JSX `style={{…}}` or a template, and rewrites **just that gradient** in place. Your dev server's hot reload does the rest. If several places match, you choose which one to update, or update them all.
+
+If a gradient can't be traced to one string in source (Tailwind classes, values built at runtime), **Copy for AI agent** copies an edit request with the element, the old and new gradient, and any source hints. Your coding agent can apply it; see [the agent skill](#ai-agent-skill).
+
+**Mesh gradients.** Drop `<gradier-gradient name="hero">` anywhere for a WebGL mesh gradient. Press <kbd>Alt</kbd>+<kbd>G</kbd> to drag colour points and tweak softness, warp, grain and motion, then save to `src/gradients.json`. This is the one part you ship: a small runtime with a CSS fallback.
 
 ```
 packages/gradier       the npm package
-examples/vite-vanilla  plain HTML + Vite
+skills/gradier         SKILL.md for AI coding agents (also shipped in the package)
+examples/vite-vanilla  plain HTML + Vite: mesh and CSS gradients
 examples/vite-react    React + Vite
 ```
 
@@ -21,7 +27,9 @@ examples/vite-react    React + Vite
 npm i gradier
 ```
 
-### Vite (React, Vue, Svelte, Astro, vanilla…)
+Only want to edit CSS gradients? Install it as a dev dependency (`npm i -D gradier`) and do the wiring for your setup below. You don't need anything else.
+
+### Vite single-page apps (React, Vue, Svelte, Solid, vanilla…)
 
 ```js
 // vite.config.js
@@ -31,6 +39,8 @@ export default {
   plugins: [gradier({ file: 'src/gradients.json' })],
 };
 ```
+
+That's all you need for CSS gradients. For mesh gradients, also register your saved gradients:
 
 ```js
 // main.js
@@ -63,12 +73,12 @@ export function Hero() {
 
 `<Gradient>` also renders a CSS approximation on the server (SSR), so the page never flashes before WebGL kicks in.
 
-### Anything else (Next.js, Rails, Django, static HTML…)
+### Anything else (Next.js, Nuxt, Astro, SvelteKit, Rails, Django, Laravel, static HTML…)
 
 Run the standalone save server next to your dev server:
 
 ```bash
-npx gradier serve --file src/gradients.json   # port 4747
+npx gradier serve --file src/gradients.json   # port 4747; --root to scan another dir, --origin to allow a non-localhost dev URL
 ```
 
 and add the overlay script to your page **in development only**:
@@ -77,13 +87,17 @@ and add the overlay script to your page **in development only**:
 <script src="http://localhost:4747/__gradier/overlay.js" defer></script>
 ```
 
-For example, in Next.js:
+For example, in a Next.js `app/layout.tsx`:
 
 ```jsx
+import Script from 'next/script';
+// inside <body>
 {process.env.NODE_ENV === 'development' && (
-  <script src="http://localhost:4747/__gradier/overlay.js" defer />
+  <Script src="http://localhost:4747/__gradier/overlay.js" strategy="afterInteractive" />
 )}
 ```
+
+The [skill](skills/gradier/SKILL.md) has snippets for Nuxt, Astro, SvelteKit, Remix, Angular, Laravel, Rails and Django.
 
 Express / webpack-dev-server users can mount the middleware directly:
 
@@ -92,7 +106,35 @@ import { createGradierMiddleware } from 'gradier/server';
 app.use(createGradierMiddleware({ file: 'src/gradients.json' }));
 ```
 
-## Editor
+## AI agent skill
+
+[`skills/gradier/SKILL.md`](skills/gradier/SKILL.md) teaches a coding agent (Claude Code or any agent that reads skills) to:
+- detect the framework, install Gradier and wire it up with dev-only guards,
+- verify the setup,
+- apply the **Copy for AI agent** edit requests, including Tailwind conversions,
+- troubleshoot.
+
+Install it into a project with:
+
+```bash
+npx gradier skill            # writes .claude/skills/gradier/SKILL.md
+npx gradier skill --print    # or print it to paste elsewhere
+```
+
+## Editor: CSS gradients
+
+| Action | How |
+| --- | --- |
+| Pick a gradient | <kbd>Alt</kbd>+<kbd>P</kbd> or the crosshair button, then click it on the page (<kbd>Esc</kbd> cancels) |
+| Add a stop | Click the gradient bar, or **+ Add** |
+| Move a stop | Drag its marker, or type a position |
+| Change a colour | Use the swatch, type any CSS colour, or use the **Opacity** slider |
+| Remove a stop | Select it and press <kbd>Delete</kbd>, or use the bin icon |
+| Angle / centre | Drag the handles on the page (<kbd>Shift</kbd> snaps), or use the sliders |
+| Save to source | **Save** or <kbd>⌘/Ctrl</kbd>+<kbd>S</kbd>. The Source row shows the file and line |
+| Can't save automatically | **Copy CSS** or **Copy for AI agent** |
+
+## Editor: mesh gradients
 
 | Action | How |
 | --- | --- |
@@ -146,7 +188,13 @@ document.querySelector('gradier-gradient').gradient = { points: [...] };
 
 ## Security
 
-The save API only accepts requests from localhost origins (and the dev server's own origin). It writes only the one configured JSON file and validates every gradient before writing. The CLI binds to `127.0.0.1`. Pass `--origin https://my.local.dev` to allow another dev origin.
+The save API only accepts requests from localhost origins and the dev server's own origin. Pass `--origin https://my.local.dev` to allow another dev origin. The CLI binds to `127.0.0.1`.
+
+It writes only two kinds of thing:
+- the mesh JSON file, after validating every gradient,
+- gradient text in source files inside the project root, outside `node_modules` and build directories.
+
+A CSS rewrite must replace text that is still a gradient with a single gradient function containing no quotes, braces, semicolons or angle brackets. It can't inject anything into your code.
 
 ## Develop
 
@@ -155,4 +203,5 @@ npm install
 npm run example         # builds the package, starts examples/vite-vanilla
 npm run example:react
 npm run dev             # rebuild the package on change
+npm test -w gradier     # parser and source-rewrite tests
 ```

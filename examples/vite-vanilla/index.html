@@ -9,13 +9,19 @@
     <gradier-gradient name="hero" class="hero">
       <div>
         <h1>Gradier</h1>
-        <p>Press <kbd>Alt+G</kbd> or click the button bottom-right to edit these gradients.</p>
+        <p>Press <kbd>Alt+G</kbd> to edit mesh gradients, or <kbd>Alt+P</kbd> to pick any CSS gradient on the page.</p>
       </div>
     </gradier-gradient>
     <section class="cards">
       <gradier-gradient name="card" class="card">Animated card</gradier-gradient>
       <gradier-gradient name="card" class="card">Same gradient, reused</gradier-gradient>
       <gradier-gradient name="footer" class="card">Not created yet – click its label</gradier-gradient>
+    </section>
+    <section class="plain">
+      <div class="button-grad">CSS linear</div>
+      <div class="glow"><span>::before radial</span></div>
+      <div class="stacked">Two layers</div>
+      <div style="height: 120px; border-radius: 16px; display: grid; place-items: center; background: linear-gradient(to bottom, #a3e635, #065f46)">Inline style</div>
     </section>
     <script type="module" src="/src/main.js"></script>
   </body>

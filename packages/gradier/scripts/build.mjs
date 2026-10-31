@@ -1,4 +1,4 @@
-import { rmSync } from 'node:fs';
+import { cpSync, rmSync } from 'node:fs';
 import * as esbuild from 'esbuild';
 
 const watch = process.argv.includes('--watch');
@@ -37,6 +37,9 @@ const builds = [
     external: ['vite'],
   },
 ];
+
+// The agent skill ships inside the package (`npx gradier skill`).
+cpSync('../../skills/gradier', 'dist/skill', { recursive: true });
 
 if (watch) {
   for (const b of builds) await (await esbuild.context(b)).watch();
