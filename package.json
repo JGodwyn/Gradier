@@ -13,6 +13,7 @@
     "example:react": "npm run build && npm run dev -w vite-react-example",
     "live": "node scripts/live.mjs --run",
     "live:react": "node scripts/live.mjs --run --example vite-react",
-    "sync": "node scripts/live.mjs"
+    "sync": "node scripts/live.mjs",
+    "pack": "npm pack -w gradier --pack-destination ."
   }
 }

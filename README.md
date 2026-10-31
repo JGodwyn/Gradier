@@ -45,12 +45,35 @@ No local setup needed:
 
 The examples already allow these preview domains. For your own project in a cloud environment, allow its domain too: `gradier({ allowedOrigins: ['https://*.app.github.dev'] })` or `gradier serve --origin 'https://*.app.github.dev'`.
 
+## Add it to your project
+
+Gradier works in any web project: it edits the gradients on your running dev site and writes them back into your source files.
+
+**1. Install it.**
 
 ```bash
 npm i gradier
 ```
 
-Only want to edit CSS gradients? Install it as a dev dependency (`npm i -D gradier`) and do the wiring for your setup below. You don't need anything else.
+Until it's published to npm, install it from your local clone of this repo instead. Build a package file once:
+
+```bash
+cd ~/Gradier && npm run pack        # writes gradier-0.1.0.tgz in the repo root
+```
+
+then install that file in your project:
+
+```bash
+npm i ~/Gradier/gradier-0.1.0.tgz
+```
+
+Run both again to pick up newer Gradier changes.
+
+Only editing existing CSS gradients? Use `npm i -D` instead: everything Gradier does then happens in development, and nothing ships. Using mesh gradients (`<gradier-gradient>`)? Keep it a normal dependency, because their small runtime (about 11 kB gzipped) ships with your site.
+
+**2. Wire it into your dev server.** Pick your setup below. With Vite, that's one line in `vite.config.js`.
+
+**3. Run your dev server as usual** and press <kbd>Alt</kbd>+<kbd>G</kbd> (mesh gradients) or <kbd>Alt</kbd>+<kbd>P</kbd> (pick any CSS gradient on the page). Saving writes to your project's files, and the editor never ends up in your production build.
 
 ### Vite single-page apps (React, Vue, Svelte, Solid, vanilla…)
 
@@ -240,6 +263,20 @@ It writes only two kinds of thing:
 - gradient text in source files inside the project root, outside `node_modules` and build directories.
 
 A CSS rewrite must replace text that is still a gradient with a single gradient function containing no quotes, braces, semicolons or angle brackets. It can't inject anything into your code.
+
+## Publish to npm
+
+The package is ready to publish as `gradier` (the name is free on npm as of this writing). From the repo root:
+
+```bash
+npm login
+```
+
+```bash
+npm publish -w gradier
+```
+
+Publishing builds the package, copies this README into it, and runs the type check and tests first; it stops if any of them fail. For later releases, bump the version first (`npm version patch -w gradier`), then publish again.
 
 ## Develop
 
