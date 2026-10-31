@@ -18,7 +18,7 @@ export interface GradierServerOptions {
   file?: string;
   /**
    * Extra origins allowed to call the API. Localhost origins and the dev server's own
-   * origin are always allowed.
+   * origin are always allowed. `*` is a wildcard, e.g. `https://*.app.github.dev`.
    */
   allowedOrigins?: string[];
 }
@@ -122,15 +122,20 @@ function send(res: ServerResponse, status: number, body: unknown, type = 'applic
 export function createGradierMiddleware(options: GradierServerOptions = {}): Middleware {
   const file = resolveGradientsFile(options);
   const root = path.resolve(options.root ?? process.cwd());
-  const extraOrigins = new Set(options.allowedOrigins ?? []);
+  const extraOrigins = (options.allowedOrigins ?? []).map(
+    (o) => new RegExp(`^${o.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')}$`, 'i'),
+  );
   let queue: Promise<unknown> = Promise.resolve();
 
   const originAllowed = (req: IncomingMessage) => {
     const origin = req.headers.origin;
     if (!origin) return true;
-    if (LOCAL_ORIGIN.test(origin) || extraOrigins.has(origin) || extraOrigins.has('*')) return true;
+    if (LOCAL_ORIGIN.test(origin) || extraOrigins.some((re) => re.test(origin))) return true;
     try {
-      return new URL(origin).host === req.headers.host;
+      // Same origin as the dev server, also behind a proxy/tunnel that sets X-Forwarded-Host.
+      const host = new URL(origin).host;
+      const forwarded = String(req.headers['x-forwarded-host'] ?? '').split(',')[0]!.trim();
+      return host === req.headers.host || (!!forwarded && host === forwarded);
     } catch {
       return false;
     }

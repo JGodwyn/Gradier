@@ -231,6 +231,7 @@ Base: `<origin>/__gradier`. Requests must come from a localhost origin, the serv
 | Symptom | Fix |
 | --- | --- |
 | No Gradier pill | Overlay not loaded. Check the script tag is rendered (view source), the dev condition is true, and the overlay URL returns 200. With Vite SSR frameworks the plugin can't inject into `index.html`, so use Path B. |
+| Saving fails with 403 in Codespaces, Gitpod, StackBlitz, a tunnel (ngrok, Cloudflare) or a custom dev domain | The page origin isn't localhost. Allow it: `gradier({ allowedOrigins: ['https://*.app.github.dev'] })` or `gradier serve --origin 'https://*.app.github.dev'` (`*` is a wildcard). Same-origin requests through proxies that set `X-Forwarded-Host` are allowed automatically. For Path B in Codespaces, also make port 4747 reachable (forward it) and point the script at its forwarded URL. |
 | Panel says "Can't reach the save server" | The CLI isn't running or uses a different port, or the page's origin isn't allowed. Add `--origin <page origin>` (a 403 in the network tab confirms this). |
 | Script blocked | A CSP on the dev site: allow `http://localhost:4747` in `script-src` and `connect-src` in development. |
 | "Not found in source" | See §5. Use **Copy for AI agent** and apply it with §6. In a monorepo, check `--root`. |

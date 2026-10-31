@@ -1,0 +1,10 @@
+{
+  "name": "Gradier",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
+  "postCreateCommand": "npm install && npm run build",
+  "postAttachCommand": "npm run dev -w vite-vanilla-example",
+  "forwardPorts": [5173],
+  "portsAttributes": {
+    "5173": { "label": "Gradier example", "onAutoForward": "openBrowser" }
+  }
+}
