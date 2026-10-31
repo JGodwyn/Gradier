@@ -1,13 +1,50 @@
+// Icons from Phosphor (https://phosphoricons.com, MIT), regular weight, inlined at build time.
+import arrowsOut from '@phosphor-icons/core/regular/arrows-out.svg';
+import caretDown from '@phosphor-icons/core/regular/caret-down.svg';
+import caretLeft from '@phosphor-icons/core/regular/caret-left.svg';
+import crosshair from '@phosphor-icons/core/regular/crosshair-simple.svg';
+import eye from '@phosphor-icons/core/regular/eye.svg';
+import eyeSlash from '@phosphor-icons/core/regular/eye-slash.svg';
+import lineSegment from '@phosphor-icons/core/regular/line-segment.svg';
+import navigationArrow from '@phosphor-icons/core/regular/navigation-arrow.svg';
+import pencil from '@phosphor-icons/core/regular/pencil-simple.svg';
+import plus from '@phosphor-icons/core/regular/plus.svg';
+import reset from '@phosphor-icons/core/regular/arrow-counter-clockwise.svg';
+import shuffle from '@phosphor-icons/core/regular/shuffle.svg';
+import sidebar from '@phosphor-icons/core/regular/sidebar-simple.svg';
+import trash from '@phosphor-icons/core/regular/trash.svg';
+import undo from '@phosphor-icons/core/regular/arrow-u-up-left.svg';
+import redo from '@phosphor-icons/core/regular/arrow-u-up-right.svg';
+import x from '@phosphor-icons/core/regular/x.svg';
+
+/** Phosphor has no plain arc or "ring with a centre dot", so these two are drawn on the same 256 grid and stroke weight. */
+const custom = (body: string) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none" stroke="currentColor" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+const arc = custom('<path d="M56 164a72 72 0 0 1 144 0"/><circle cx="56" cy="188" r="20"/><circle cx="200" cy="188" r="20"/>');
+const node = custom('<circle cx="128" cy="128" r="88"/><circle cx="128" cy="128" r="14" fill="currentColor" stroke="none"/>');
+
 export const ICONS = {
-  plus: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>',
-  close: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
-  trash: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.7 8.5h5.6l.7-8.5"/></svg>',
-  edit: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 3.5l2 2L6 12H4v-2z"/></svg>',
-  undo: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4L2.5 6.5 5 9"/><path d="M2.5 6.5H10a3.5 3.5 0 010 7H7"/></svg>',
-  redo: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4l2.5 2.5L11 9"/><path d="M13.5 6.5H6a3.5 3.5 0 000 7h3"/></svg>',
-  dock: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="M9.5 3v10"/></svg>',
-  pick: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="4.5"/><path d="M8 1v3M8 12v3M1 8h3M12 8h3"/></svg>',
-  back: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3L5 8l5 5"/></svg>',
-  chevron: '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>',
-  reset: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8a5 5 0 11-1.5-3.5"/><path d="M13 2.5v3h-3"/></svg>',
+  plus,
+  close: x,
+  trash,
+  edit: pencil,
+  undo,
+  redo,
+  dock: sidebar,
+  pick: crosshair,
+  back: caretLeft,
+  chevron: caretDown,
+  reset,
+};
+
+export const TOOL_GLYPHS = {
+  select: navigationArrow,
+  line: lineSegment,
+  arc,
+  node,
+  pencil,
+  shuffle,
+  scatter: arrowsOut,
+  eye,
+  eyeOff: eyeSlash,
 };

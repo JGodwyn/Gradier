@@ -4,7 +4,8 @@ import * as esbuild from 'esbuild';
 const watch = process.argv.includes('--watch');
 rmSync('dist', { recursive: true, force: true });
 
-const common = { bundle: true, sourcemap: true, target: 'es2020', logLevel: 'info' };
+// SVGs (Phosphor icons) are inlined as strings.
+const common = { bundle: true, sourcemap: true, target: 'es2020', logLevel: 'info', loader: { '.svg': 'text' } };
 
 const builds = [
   // Runtime (browser, shared chunk so `gradier` and `gradier/react` share code).

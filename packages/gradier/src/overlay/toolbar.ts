@@ -1,21 +1,9 @@
 import { h } from './dom';
+import { TOOL_GLYPHS } from './icons';
 
 export type Tool = 'select' | 'line' | 'arc' | 'node' | 'pencil';
 
-const svg = (body: string) =>
-  `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
-
-export const TOOL_ICONS: Record<Tool | 'shuffle' | 'scatter' | 'eye' | 'eyeOff', string> = {
-  select: svg('<path d="M3.5 4.5l13 5.2-5.6 1.6-3.3 4.9z"/>'),
-  line: svg('<path d="M4 15.5L16 6"/><circle cx="4" cy="15.5" r=".9" fill="currentColor"/><circle cx="16" cy="6" r=".9" fill="currentColor"/>'),
-  arc: svg('<path d="M3.5 14a6.5 6.5 0 0113 0"/><circle cx="3.5" cy="14" r=".9" fill="currentColor"/><circle cx="16.5" cy="14" r=".9" fill="currentColor"/>'),
-  node: svg('<circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r=".9" fill="currentColor"/>'),
-  pencil: svg('<path d="M13.2 4.3l2.5 2.5-8.6 8.6-3.3.8.8-3.3z"/><path d="M11.6 5.9l2.5 2.5"/>'),
-  shuffle: svg('<path d="M3 6.5h2.5c3.5 0 5.5 7 9 7H17"/><path d="M3 13.5h2.5c1.4 0 2.5-1.1 3.4-2.4M11.1 8.9c.9-1.3 2-2.4 3.4-2.4H17"/><path d="M15 4.5l2 2-2 2M15 11.5l2 2-2 2"/>'),
-  scatter: svg('<circle cx="5" cy="15" r="2"/><circle cx="15.5" cy="4.5" r="2"/><path d="M6.6 13.4l6-6"/><path d="M9.6 7.4h3v3"/>'),
-  eye: svg('<path d="M2.5 12.5C4.5 9 7 7.5 10 7.5s5.5 1.5 7.5 5"/><circle cx="10" cy="12" r="1.8"/>'),
-  eyeOff: svg('<path d="M2.5 12.5C4.5 9 7 7.5 10 7.5s5.5 1.5 7.5 5"/><circle cx="10" cy="12" r="1.8"/><path d="M4 4l12 12"/>'),
-};
+export const TOOL_ICONS: Record<Tool | 'shuffle' | 'scatter' | 'eye' | 'eyeOff', string> = TOOL_GLYPHS;
 
 export const TOOLS: Array<{ id: Tool; label: string; key: string; color: string }> = [
   { id: 'select', label: 'Select', key: 'V', color: '#facc15' },
@@ -56,6 +44,16 @@ export function createToolbar(actions: ToolbarActions) {
   const [select, ...draw] = [...toolButtons.values()];
   const el = h('div', { className: 'toolbar', role: 'toolbar' }, select!, sep(), ...draw, sep(), shuffle, scatter, sep(), eye);
   el.style.pointerEvents = 'auto';
+  // Once one tooltip has shown, the rest appear instantly while the pointer stays on the toolbar.
+  let warmTimer = 0;
+  el.addEventListener('pointerenter', () => {
+    clearTimeout(warmTimer);
+    warmTimer = window.setTimeout(() => el.classList.add('warm'), 400);
+  });
+  el.addEventListener('pointerleave', () => {
+    clearTimeout(warmTimer);
+    warmTimer = window.setTimeout(() => el.classList.remove('warm'), 250);
+  });
 
   const patch = (s: ToolbarState) => {
     for (const [id, b] of toolButtons) b.classList.toggle('on', id === s.tool);
