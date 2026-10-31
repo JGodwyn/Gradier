@@ -10,6 +10,9 @@
     "dev": "npm run dev -w gradier",
     "typecheck": "npm run typecheck -w gradier",
     "example": "npm run build && npm run dev -w vite-vanilla-example",
-    "example:react": "npm run build && npm run dev -w vite-react-example"
+    "example:react": "npm run build && npm run dev -w vite-react-example",
+    "live": "node scripts/live.mjs --run",
+    "live:react": "node scripts/live.mjs --run --example vite-react",
+    "sync": "node scripts/live.mjs"
   }
 }

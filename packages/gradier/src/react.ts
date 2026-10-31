@@ -1,4 +1,4 @@
-import { createElement, useCallback, useEffect, useState, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react';
+import { createElement, useCallback, useEffect, useState, type CSSProperties, type HTMLAttributes, type ReactElement, type ReactNode } from 'react';
 import { gradientToCSS } from './core/css';
 import { defineGradientElement, TAG, type GradierElement } from './core/element';
 import { getGradient, subscribe } from './core/store';
@@ -16,7 +16,7 @@ export interface GradientProps extends HTMLAttributes<HTMLElement> {
  * React wrapper around `<gradier-gradient>`. Renders a CSS approximation on the server
  * so there's no flash before the WebGL version takes over.
  */
-export function Gradient({ name, gradient, style, children, ...rest }: GradientProps) {
+export function Gradient({ name, gradient, style, children, ...rest }: GradientProps): ReactElement {
   const [, rerender] = useState(0);
   useEffect(() => {
     defineGradientElement();

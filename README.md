@@ -21,7 +21,22 @@ examples/vite-vanilla  plain HTML + Vite: mesh and CSS gradients
 examples/vite-react    React + Vite
 ```
 
-## Try it in the cloud
+## Run it locally
+
+```bash
+git clone -b main https://github.com/JGodwyn/Gradier.git
+cd Gradier
+npm install
+npm run live
+```
+
+`npm run live` starts the example at http://localhost:5173. It also checks GitHub's `main` every 15 seconds and pulls new changes. After a pull, it rebuilds, runs `npm install` if dependencies changed, and restarts the server, so you only need to refresh the browser. It only ever fast-forwards: if your own edits are in the way, it tells you and doesn't touch them.
+
+Variants:
+- `npm run live:react` runs the React example instead.
+- `npm run sync` pulls without running anything.
+- `--interval 30` changes how often it checks.
+
 
 No local setup needed:
 
