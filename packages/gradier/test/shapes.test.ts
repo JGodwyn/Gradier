@@ -120,8 +120,8 @@ test('per-point softness and filters, and blend mode, survive normalization; def
   const g = normalizeGradient({
     blendMode: 'overlay',
     points: [
-      { x: 0.1, y: 0.1, color: '#f00', softness: 0.9, hue: 30, saturation: 1 },
-      { x: 0.9, y: 0.9, color: '#00f' },
+      { x: 0.1, y: 0.1, color: '#f00', softness: 0.9, hue: 30, saturation: 1, blendMode: 'multiply' },
+      { x: 0.9, y: 0.9, color: '#00f', blendMode: 'nope' },
     ],
   });
   assert.equal(g.blendMode, 'overlay');
@@ -129,6 +129,8 @@ test('per-point softness and filters, and blend mode, survive normalization; def
   assert.equal(g.points[0]!.hue, 30);
   assert.equal(g.points[0]!.saturation, undefined);
   assert.equal(g.points[1]!.softness, undefined);
+  assert.equal(g.points[0]!.blendMode, 'multiply');
+  assert.equal(g.points[1]!.blendMode, undefined);
   assert.equal(normalizeGradient({ blendMode: 'oklab', points: g.points }).blendMode, undefined);
   assert.equal(normalizeGradient({ blendMode: 'bogus', points: g.points }).blendMode, undefined);
 });

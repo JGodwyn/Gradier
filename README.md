@@ -173,7 +173,7 @@ npx gradier skill --print    # or print it to paste elsewhere
 | Shuffle / scatter | <kbd>X</kbd> shuffles colours, <kbd>R</kbd> scatters points |
 | Hide handles | <kbd>H</kbd> or the eye button |
 | Select / deselect | Click a node to select it; click empty space (or <kbd>Esc</kbd>) to deselect. The points list shows just the selected node; open its dropdown to see them all |
-| Per-node or all nodes | With a node selected, **Softness** and the **Filter** sliders change only that node (the chip says *Node N*). With nothing selected they change every node (*All nodes*) |
+| Per-node or all nodes | With a node selected, **Softness**, **Blend mode** and the **Filter** sliders change only that node (a node's blend mode shows around it and fades into its neighbours) (the chip says *Node N*). With nothing selected they change every node (*All nodes*) |
 | Blend mode | Drag the **Blend mode** field (or use the arrow keys) to step through Normal, Linear, OKLab, Screen, Multiply, Overlay and Soft light |
 | Grain | **Mono**, **Duo** (warm/cool) or **Multi** (per-channel) grain, with opacity, grain size and density |
 | Filters | Hue, saturation, brightness and temperature, with a reset button |
@@ -206,7 +206,7 @@ Saving writes only the gradients file. Vite's HMR is told to skip that file, so 
 
 `x`/`y` are relative to the element (0–1). Points can also carry optional fields, which the editor writes for you:
 
-- `softness`, `hue`, `saturation`, `brightness`, `temperature`: per-point overrides (softness replaces the gradient's; filters stack on top of it).
+- `softness`, `blendMode`, `hue`, `saturation`, `brightness`, `temperature`: per-point overrides (softness and blend mode replace the gradient's; filters stack on top of it).
 - `radius`: how far the colour reaches, as a multiple of the default (`1`).
 - `arms`: four `[dx, dy]` direction handles (in units of √(width × height)) that stretch the colour's reach.
 - `shape`: `{ "type": "line" | "arc", "a": {x, y}, "b": {x, y} }` makes the colour follow a segment from `a` to `b`, or an arc from `a` through the point to `b`. `{ "type": "path", "points": [{x, y}, …] }` follows a freehand stroke. Optional `ra` / `rb` set the colour's width at the start / end.

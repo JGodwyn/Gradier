@@ -38,6 +38,8 @@ export interface GradientPoint {
   shape?: PointShape;
   /** Per-point softness (0–1); overrides the gradient's softness for this point. */
   softness?: number;
+  /** Per-point blend mode; overrides the gradient's around this point. */
+  blendMode?: BlendMode;
   /** Per-point filters, applied on top of the gradient's filters. */
   hue?: number;
   saturation?: number;
@@ -183,6 +185,7 @@ export function normalizeGradient(input: unknown): Gradient {
     if (a) out.arms = a;
     const raw = p as Record<string, unknown>;
     if (typeof raw.softness === 'number') out.softness = round(num(raw.softness, 0.5, 0, 1));
+    if (BLEND_MODES.some(([m]) => m === raw.blendMode)) out.blendMode = raw.blendMode as BlendMode;
     for (const key of POINT_FILTERS) {
       const [min, max] = LOOK_RANGES[key];
       const v = round(num(raw[key], LOOK_DEFAULTS[key], min, max));

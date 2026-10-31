@@ -21,7 +21,10 @@ uniform vec2 u_res;
 uniform float u_time;
 uniform int u_count;
 uniform vec2 u_pos[${MAX_POINTS}];
+// each point's colour (already filtered) in OKLab, linear RGB and sRGB
 uniform vec3 u_col[${MAX_POINTS}];
+uniform vec3 u_colLin[${MAX_POINTS}];
+uniform vec3 u_colSrgb[${MAX_POINTS}];
 // x: kind (0 point, 1 curve), y: radius multiplier, z: number of curve samples
 uniform vec3 u_meta[${MAX_POINTS}];
 // curve width multipliers at the start (x) and end (y)
@@ -33,10 +36,9 @@ uniform vec4 u_armLen[${MAX_POINTS}];
 uniform sampler2D u_paths;
 // per-point falloff exponent (lower = softer)
 uniform float u_power[${MAX_POINTS}];
-// 0 OKLab, 1 linear RGB, 2 sRGB: the space u_col is in and colours are mixed in
-uniform int u_space;
-// 0 none, 1 screen, 2 multiply, 3 overlay, 4 soft light: a contrast curve applied to the mixed colour
-uniform int u_curve;
+// Per-point blend mode: x = mixing space (0 OKLab, 1 linear RGB, 2 sRGB),
+// y = contrast curve (0 none, 1 screen, 2 multiply, 3 overlay, 4 soft light)
+uniform vec2 u_mode[${MAX_POINTS}];
 uniform float u_warp;
 uniform float u_warpScale;
 uniform float u_grain;
@@ -146,8 +148,9 @@ void main() {
   uv += n * u_warp * 0.22;
   vec2 q = uv * scale;
 
-  vec3 sum = vec3(0.0);
+  vec3 sum = vec3(0.0), sumLin = vec3(0.0), sumSrgb = vec3(0.0);
   float total = 0.0;
+  float ws[${MAX_POINTS}];
   for (int i = 0; i < ${MAX_POINTS}; i++) {
     if (i >= u_count) break;
     vec3 meta = u_meta[i];
@@ -172,17 +175,31 @@ void main() {
     }
     dist /= meta.y;
     float w = pow(dist * dist + 1e-5, -u_power[i] * 0.5);
+    ws[i] = w;
     sum += u_col[i] * w;
+    sumLin += u_colLin[i] * w;
+    sumSrgb += u_colSrgb[i] * w;
     total += w;
   }
 
   // Colours arrive already filtered; mix them in the chosen space.
-  vec3 mixed = sum / total;
-  vec3 col = u_space == 0 ? linearToSrgb(oklabToLinear(mixed)) : u_space == 1 ? linearToSrgb(mixed) : clamp(mixed, 0.0, 1.0);
-  if (u_curve == 1) col = 1.0 - (1.0 - col) * (1.0 - col);
-  else if (u_curve == 2) col = col * col;
-  else if (u_curve == 3) col = mix(2.0 * col * col, 1.0 - 2.0 * (1.0 - col) * (1.0 - col), step(0.5, col));
-  else if (u_curve == 4) col = col * col * (3.0 - 2.0 * col);
+  // The blend in each mixing space, as display sRGB.
+  vec3 inOklab = linearToSrgb(oklabToLinear(sum / total));
+  vec3 inLinear = linearToSrgb(sumLin / total);
+  vec3 inSrgb = clamp(sumSrgb / total, 0.0, 1.0);
+  // Each point applies its own blend mode, weighted by its influence here, so a mode set on one node shows around
+  // that node and fades into its neighbours. With one mode everywhere this is exactly that mode.
+  vec3 col = vec3(0.0);
+  for (int i = 0; i < ${MAX_POINTS}; i++) {
+    if (i >= u_count) break;
+    vec2 m = u_mode[i];
+    vec3 c = m.x < 0.5 ? inOklab : m.x < 1.5 ? inLinear : inSrgb;
+    if (m.y > 3.5) c = c * c * (3.0 - 2.0 * c);
+    else if (m.y > 2.5) c = mix(2.0 * c * c, 1.0 - 2.0 * (1.0 - c) * (1.0 - c), step(0.5, c));
+    else if (m.y > 1.5) c = c * c;
+    else if (m.y > 0.5) c = 1.0 - (1.0 - c) * (1.0 - c);
+    col += c * (ws[i] / total);
+  }
 
   // Film grain: every value comes from its own channel of an independent hash, so there is no shared pattern.
   float seed = floor(fract(u_time) * 64.0);
@@ -214,7 +231,7 @@ const DEFAULT_ARMS: Array<[number, number]> = [
 
 const GRAIN_TYPES = { mono: 0, duo: 1, multi: 2 } as const;
 
-/** Blend mode → [mixing space, contrast curve] (see u_space / u_curve in the shader). */
+/** Blend mode → [mixing space, contrast curve] (see u_mode in the shader). */
 const BLEND: Record<BlendMode, [number, number]> = {
   oklab: [0, 0],
   linear: [1, 0],
@@ -280,7 +297,7 @@ export class MeshRenderer {
 
     for (const name of [
       'u_res', 'u_time', 'u_count', 'u_pos', 'u_col', 'u_meta', 'u_ends', 'u_armAng', 'u_armLen', 'u_paths',
-      'u_power', 'u_space', 'u_curve', 'u_warp', 'u_warpScale', 'u_grain', 'u_grainOpts',
+      'u_power', 'u_colLin', 'u_colSrgb', 'u_mode', 'u_warp', 'u_warpScale', 'u_grain', 'u_grainOpts',
     ]) {
       this.uniforms[name] = gl.getUniformLocation(p, name);
     }
@@ -320,7 +337,9 @@ export class MeshRenderer {
     const sy = 1 / sx;
     const toScaled = (p: Vec, dx: number, dy: number) => ({ x: (p.x + dx) * sx, y: (p.y + dy) * sy });
     const data = this.pathData;
-    const [space, curve] = BLEND[look(g, 'blendMode')];
+    const colLin = new Float32Array(MAX_POINTS * 3);
+    const colSrgb = new Float32Array(MAX_POINTS * 3);
+    const mode = new Float32Array(MAX_POINTS * 2);
     const power = new Float32Array(MAX_POINTS).fill(3.75);
     g.points.slice(0, count).forEach((pt, i) => {
       const dx = drift * Math.sin(t * 0.6 + i * 1.7);
@@ -328,7 +347,11 @@ export class MeshRenderer {
       pos[i * 2] = pt.x + dx;
       pos[i * 2 + 1] = pt.y + dy;
       const lab = pointLab(pt, g);
-      col.set(space === 0 ? lab : space === 1 ? oklabToLinear(lab) : oklabToLinear(lab).map(encodeSrgb), i * 3);
+      const lin = oklabToLinear(lab);
+      col.set(lab, i * 3);
+      colLin.set(lin, i * 3);
+      colSrgb.set(lin.map(encodeSrgb), i * 3);
+      mode.set(BLEND[pt.blendMode ?? look(g, 'blendMode')], i * 2);
       // Higher softness = lower exponent = wider, gentler falloff.
       power[i] = 6 - (pt.softness ?? g.softness) * 4.5;
       meta[i * 3 + 1] = pt.radius ?? 1;
@@ -382,8 +405,9 @@ export class MeshRenderer {
     gl.uniform4fv(u.u_armAng!, armAng);
     gl.uniform4fv(u.u_armLen!, armLen);
     gl.uniform1fv(u.u_power!, power);
-    gl.uniform1i(u.u_space!, space);
-    gl.uniform1i(u.u_curve!, curve);
+    gl.uniform3fv(u.u_colLin!, colLin);
+    gl.uniform3fv(u.u_colSrgb!, colSrgb);
+    gl.uniform2fv(u.u_mode!, mode);
     gl.uniform1f(u.u_warp!, g.warp);
     gl.uniform1f(u.u_warpScale!, g.warpScale);
     gl.uniform1f(u.u_grain!, g.grain);
