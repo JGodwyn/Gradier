@@ -25,8 +25,8 @@ examples/vite-react    React + Vite
 
 No local setup needed:
 
-- **GitHub Codespaces** (recommended, a full Linux VM): [open in Codespaces](https://codespaces.new/JGodwyn/Gradier?ref=claude/trusting-darwin-4vqzdz). It installs, builds and starts the example. When port 5173 opens in a new tab, press <kbd>Alt</kbd>+<kbd>P</kbd> and click a gradient. Saves land in the codespace's files, and you can watch them change in the editor.
-- **StackBlitz** (runs in your browser tab): [open in StackBlitz](https://stackblitz.com/github/JGodwyn/Gradier/tree/claude/trusting-darwin-4vqzdz).
+- **GitHub Codespaces** (recommended, a full Linux VM): [open in Codespaces](https://codespaces.new/JGodwyn/Gradier). It installs, builds and starts the example. When port 5173 opens in a new tab, press <kbd>Alt</kbd>+<kbd>P</kbd> and click a gradient. Saves land in the codespace's files, and you can watch them change in the editor.
+- **StackBlitz** (runs in your browser tab): [open in StackBlitz](https://stackblitz.com/github/JGodwyn/Gradier).
 
 The examples already allow these preview domains. For your own project in a cloud environment, allow its domain too: `gradier({ allowedOrigins: ['https://*.app.github.dev'] })` or `gradier serve --origin 'https://*.app.github.dev'`.
 
