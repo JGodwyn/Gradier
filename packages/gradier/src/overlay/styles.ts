@@ -133,4 +133,25 @@ kbd { font: 10px ui-monospace, monospace; padding: 1px 4px; border-radius: 4px; 
   border: 2.5px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.3), 0 4px 12px rgba(0,0,0,.35); }
 .rotor { background: var(--accent); }
 .center-handle { background: #18181b; width: 22px; height: 22px; margin: -11px 0 0 -11px; }
+
+.toolbar { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 2;
+  display: flex; align-items: center; gap: 2px; height: 44px; padding: 0 6px; border-radius: 12px;
+  background: rgba(44, 44, 46, 0.94); border: 1px solid rgba(255,255,255,.14);
+  box-shadow: 0 10px 30px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.06); backdrop-filter: blur(16px); }
+.tool { position: relative; width: 36px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 8px;
+  background: transparent; color: #f4f4f5; padding: 0; transition: background .1s, color .1s; }
+.tool:hover { background: rgba(255,255,255,.08); }
+.tool:active { transform: translateY(.5px); }
+.tool.on { color: var(--tool-color, var(--accent)); }
+.tool.off { color: var(--muted); }
+.tool svg { display: block; pointer-events: none; }
+.tool-sep { width: 1px; height: 18px; margin: 0 6px; background: rgba(255,255,255,.18); }
+.tool .tip { position: absolute; left: 50%; bottom: calc(100% + 12px); transform: translate(-50%, 4px); pointer-events: none;
+  display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 6px 0 12px; border-radius: 8px; white-space: nowrap;
+  background: #1c1c1e; border: 1px solid rgba(255,255,255,.12); color: #e4e4e7; font-size: 12px; font-weight: 500; letter-spacing: .02em;
+  box-shadow: 0 6px 18px rgba(0,0,0,.35); opacity: 0; transition: opacity .12s, transform .12s; }
+.tool .tip kbd { min-width: 18px; height: 18px; display: grid; place-items: center; padding: 0 4px; border: 0; border-radius: 4px;
+  background: rgba(255,255,255,.1); color: #d4d4d8; font-size: 10px; }
+.tool:hover .tip { opacity: 1; transform: translate(-50%, 0); transition-delay: .25s; }
+.canvas { position: fixed; pointer-events: auto; cursor: crosshair; touch-action: none; }
 `;

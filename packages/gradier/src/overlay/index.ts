@@ -7,6 +7,7 @@ import { h } from './dom';
 import { ICONS } from './icons';
 import { startPicker } from './picker';
 import { STYLES } from './styles';
+import { createToolbar, TOOLS, ACTION_KEYS, type Tool } from './toolbar';
 
 declare global {
   interface Window {
@@ -60,6 +61,8 @@ function boot() {
     loaded: false,
     saving: false,
     mode: 'mesh' as 'mesh' | 'css',
+    tool: 'select' as Tool,
+    handlesHidden: false,
   };
   let cancelPick: (() => void) | null = null;
   const history = new Map<string, { undo: string[]; redo: string[]; key?: string; at: number }>();
@@ -341,6 +344,34 @@ function boot() {
     });
   };
 
+  const shuffleColors = () =>
+    update((d) => {
+      const colors = d.points.map((p) => p.color);
+      // Rotate rather than sort randomly so every click visibly changes something.
+      const shift = 1 + Math.floor(Math.random() * Math.max(1, colors.length - 1));
+      d.points.forEach((p, i) => (p.color = colors[(i + shift) % colors.length]!));
+    });
+
+  const scatterPoints = () =>
+    update((d) => {
+      d.points.forEach((p) => {
+        p.x = Math.round((0.08 + Math.random() * 0.84) * 1000) / 1000;
+        p.y = Math.round((0.08 + Math.random() * 0.84) * 1000) / 1000;
+      });
+    });
+
+  const setTool = (tool: Tool) => {
+    state.tool = tool;
+    render();
+  };
+
+  const toggleHandles = () => {
+    state.handlesHidden = !state.handlesHidden;
+    render();
+  };
+
+  const toolbar = createToolbar({ setTool, shuffle: shuffleColors, scatter: scatterPoints, toggleHandles });
+
   const setOpen = (open: boolean) => {
     state.open = open;
     storage('gradier:open', open ? '1' : '0');
@@ -482,7 +513,7 @@ function boot() {
             h('button', { className: 'btn small', type: 'button', onclick: () => addPoint() }, '+ Add'),
           ),
           list,
-          h('div', { className: 'hint' }, 'Drag the handles on the page. Double-click the gradient to add a point.'),
+          h('div', { className: 'hint' }, 'Drag the handles on the page. Double-click the gradient, or use the Node tool (N), to add a point.'),
         ),
       );
 
@@ -529,11 +560,7 @@ function boot() {
               {
                 className: 'btn grow',
                 type: 'button',
-                onclick: () =>
-                  update((d) => {
-                    const colors = d.points.map((p) => p.color).sort(() => Math.random() - 0.5);
-                    d.points.forEach((p, i) => (p.color = colors[i]!));
-                  }),
+                onclick: shuffleColors,
               },
               'Shuffle colors',
             ),
@@ -623,6 +650,7 @@ function boot() {
         root.append(launcher);
       }
       launcher.innerHTML = `<span class="logo"></span>Gradier${count ? '<span class="dot"></span>' : ''}`;
+      toolbar.el.remove();
       stage.replaceChildren();
       overlays.clear();
       handles.length = 0;
@@ -654,6 +682,11 @@ function boot() {
       panel = next;
       panel.querySelector('.body')!.scrollTop = scroll;
     }
+    const showToolbar = state.mode === 'mesh' && !cancelPick && !!g;
+    if (showToolbar) {
+      if (!toolbar.el.isConnected) root.append(toolbar.el);
+      toolbar.patch({ tool: state.tool, handlesHidden: state.handlesHidden });
+    } else toolbar.el.remove();
     if (state.mode === 'css') css.patch();
     else patch(g);
   };
@@ -669,12 +702,26 @@ function boot() {
   const handles: HTMLElement[] = [];
   let drag: { index: number; el: HTMLElement } | null = null;
 
+  /** Transparent layer over the selected gradient that receives clicks while a drawing tool is active. */
+  const canvas = h('div', { className: 'canvas' });
+  canvas.addEventListener('pointerdown', (e) => {
+    const el = state.target;
+    if (!el || e.button !== 0) return;
+    e.preventDefault();
+    const r = el.getBoundingClientRect();
+    const x = clamp((e.clientX - r.left) / r.width, 0, 1);
+    const y = clamp((e.clientY - r.top) / r.height, 0, 1);
+    if (state.tool === 'node') addPoint(x, y);
+    else toast(`${TOOLS.find((t) => t.id === state.tool)?.label} tool is coming soon`);
+  });
+
   const positionStage = () => {
     if (!state.open) return;
     if (state.mode === 'css') {
       for (const o of overlays.values()) o.frame.remove(), o.chip.remove();
       overlays.clear();
       while (handles.length) handles.pop()!.remove();
+      canvas.remove();
       css.positionStage();
       return;
     }
@@ -721,8 +768,13 @@ function boot() {
 
     const g = selected ? getGradient(selected) : undefined;
     const target = state.target;
-    const points = g && target && seen.has(target) ? g.points : [];
+    const visible = !!(g && target && seen.has(target));
+    const points = visible && !state.handlesHidden ? g!.points : [];
     const r = target?.getBoundingClientRect();
+    if (visible && state.tool !== 'select' && !cancelPick) {
+      if (!canvas.isConnected) stage.prepend(canvas);
+      Object.assign(canvas.style, { left: `${r!.left}px`, top: `${r!.top}px`, width: `${r!.width}px`, height: `${r!.height}px` });
+    } else canvas.remove();
     while (handles.length > points.length) handles.pop()!.remove();
     points.forEach((p, i) => {
       let el = handles[i];
@@ -797,6 +849,16 @@ function boot() {
     true,
   );
 
+  const toolKey = (key: string): (() => void) | undefined => {
+    if (!state.selected || !getGradient(state.selected)) return;
+    const k = key.toUpperCase();
+    const tool = TOOLS.find((t) => t.key === k);
+    if (tool) return () => setTool(tool.id);
+    if (k === ACTION_KEYS.shuffle) return shuffleColors;
+    if (k === ACTION_KEYS.scatter) return scatterPoints;
+    if (k === ACTION_KEYS.eye) return toggleHandles;
+  };
+
   window.addEventListener(
     'keydown',
     (e) => {
@@ -838,8 +900,12 @@ function boot() {
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && state.point !== null && !isTextField(target)) {
         e.preventDefault();
         removePoint(state.point);
+      } else if (!mod && !e.altKey && !isTextField(target) && toolKey(e.key)) {
+        e.preventDefault();
+        toolKey(e.key)!();
       } else if (e.key === 'Escape' && !isTextField(target)) {
-        if (state.point !== null) {
+        if (state.tool !== 'select') setTool('select');
+        else if (state.point !== null) {
           state.point = null;
           render();
         } else setOpen(false);
