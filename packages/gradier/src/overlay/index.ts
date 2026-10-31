@@ -425,7 +425,11 @@ function boot() {
 
   const toolbar = createToolbar({ setTool, shuffle: shuffleColors, scatter: scatterPoints, toggleHandles });
 
-  const setOpen = (open: boolean) => {
+  /** Set by mouse-initiated open/close so the next render animates; keyboard toggles stay instant. */
+  let animateNext = false;
+
+  const setOpen = (open: boolean, animate = false) => {
+    animateNext = animate;
     state.open = open;
     storage('gradier:open', open ? '1' : '0');
     if (open) ensureSelection();
@@ -440,10 +444,15 @@ function boot() {
   };
 
   /** A titled panel section. Collapsible ones remember their state per browser. */
+  /**
+   * A titled panel section. Collapsible ones toggle in place (no rebuild) so they can animate, and remember their
+   * state per browser. `compact` sections don't hide their body when closed; they collapse everything except the
+   * rows marked `.current` (used by the points list).
+   */
   const section = (
     id: string,
     title: string,
-    opts: { collapsible?: boolean; open?: boolean; actions?: Node[]; peek?: Array<Node | null> },
+    opts: { collapsible?: boolean; open?: boolean; actions?: Node[]; compact?: boolean },
     ...children: Array<Node | null | false>
   ) => {
     const open = !opts.collapsible || sectionOpen(id, opts.open ?? true);
@@ -453,21 +462,58 @@ function boot() {
       'div',
       { className: `label${opts.collapsible ? ' toggle' : ''}` },
       h('span', { className: 'grow' }, title),
-      ...(open || opts.peek ? (opts.actions ?? []) : []),
+      ...(opts.actions ?? []).map((a) => h('span', { className: 'act' }, a)),
       opts.collapsible ? chevron : null,
     );
-    // `peek` is what a closed section still shows (e.g. just the selected point).
-    const el = h('div', { className: `section${open ? '' : ' closed'}` }, label, ...(open ? children : (opts.peek ?? [])));
+    const body = h('div', { className: 'sbody' }, h('div', { className: 'sinner' }, ...children));
+    const el = h('div', { className: `section${open ? '' : ' closed'}${opts.compact ? ' compact' : ''}` }, label, body);
+    // Which parts are visible for a given open state: the whole body, or (compact) the rows that apply.
+    const apply = (isOpen: boolean, animate: boolean) => {
+      if (!opts.compact) return setShown(body, isOpen, animate);
+      for (const wrap of body.querySelectorAll<HTMLElement>('.pwrap')) {
+        const show = wrap.classList.contains('when-compact') ? !isOpen : wrap.classList.contains('when-open') ? isOpen : isOpen || wrap.classList.contains('current');
+        setShown(wrap, show, animate);
+      }
+    };
+    apply(open, false);
     if (opts.collapsible) {
       label.addEventListener('click', (e) => {
         if ((e.target as HTMLElement).closest('button')) return;
-        storage(`gradier:section:${id}`, open ? '0' : '1');
-        structure = '';
-        render();
+        const nowOpen = el.classList.toggle('closed') === false;
+        apply(nowOpen, true);
+        storage(`gradier:section:${id}`, nowOpen ? '1' : '0');
       });
     }
     return el;
   };
+
+  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+
+  /**
+   * Show or hide a block, animating its measured height and opacity (Web Animations API, so it is interruptible:
+   * a second toggle mid-way continues from wherever it is).
+   */
+  const setShown = (el: HTMLElement, show: boolean, animate: boolean) => {
+    el.inert = !show;
+    if (!animate || !el.isConnected) return void el.classList.toggle('shut', !show);
+    const from = el.getBoundingClientRect().height;
+    const fromOpacity = getComputedStyle(el).opacity;
+    el.getAnimations().forEach((a) => a.cancel());
+    el.classList.toggle('shut', !show);
+    const to = el.getBoundingClientRect().height;
+    if (from === to && fromOpacity === (show ? '1' : '0')) return;
+    const reduce = reducedMotion?.matches;
+    el.animate(
+      [
+        { height: `${reduce ? to : from}px`, opacity: fromOpacity },
+        { height: `${to}px`, opacity: show ? 1 : 0 },
+      ],
+      { duration: 220, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' },
+    );
+  };
+
+  /** A row in a compact section: collapses away (animated) unless it's `current` or the section is open. */
+  const collapsible = (node: Node, cls = '') => h('div', { className: `pwrap ${cls}` }, h('div', { className: 'clip' }, node));
 
   const numValue = (g: Gradient, key: NumKey) => (key in LOOK_DEFAULTS ? look(g, key as LookNumKey) : g[key as BaseNumKey]);
 
@@ -609,7 +655,7 @@ function boot() {
         render();
       }),
       sep(),
-      button('icon ghost', ICONS.close, 'Close (Alt+G)', () => setOpen(false)),
+      button('icon ghost', ICONS.close, 'Close (Alt+G)', () => setOpen(false, true)),
     );
     const panelClass = `panel${state.dock === 'left' ? ' left' : ''}`;
 
@@ -699,9 +745,16 @@ function boot() {
           button('icon ghost small', ICONS.trash, 'Remove point', () => removePoint(i)),
         );
         refs.rows[i] = row;
-        list.append(row);
+        list.append(collapsible(row, state.point === i ? 'current' : ''));
       });
-      const selectedRow = state.point !== null ? refs.rows[state.point] : undefined;
+      if (state.point === null) {
+        list.append(
+          collapsible(
+            h('div', { className: 'hint' }, 'No node selected: controls marked “All nodes” change every node. Click a node to edit just that one.'),
+            'when-compact',
+          ),
+        );
+      }
       body.append(
         section(
           'points',
@@ -709,13 +762,11 @@ function boot() {
           {
             collapsible: true,
             open: false,
+            compact: true,
             actions: [h('button', { className: 'btn small', type: 'button', onclick: () => addPoint() }, '+ Add')],
-            peek: [
-              selectedRow ? h('div', { className: 'points' }, selectedRow) : h('div', { className: 'hint' }, 'No node selected: controls marked “All nodes” change every node. Click a node to edit just that one.'),
-            ],
           },
           list,
-          h('div', { className: 'hint' }, 'Drag the handles on the page. Use the toolbar below to add nodes, lines, arcs and strokes.'),
+          collapsible(h('div', { className: 'hint' }, 'Drag the handles on the page. Use the toolbar below to add nodes, lines, arcs and strokes.'), 'when-open'),
         ),
         section('blend', 'Blend', { collapsible: true, actions: [scopeChip()] }, sliderRow(BLEND_SLIDERS[0]!), blendRow(), ...BLEND_SLIDERS.slice(1).map(sliderRow)),
         section(
@@ -870,22 +921,38 @@ function boot() {
     if (refs.redo) refs.redo.disabled = !entry?.redo.length;
   };
 
+  /** Animate an element in from its `.from` state (CSS defines the transition and the hidden pose). */
+  const enter = (el: HTMLElement) => {
+    el.classList.add('from');
+    void el.offsetWidth;
+    el.classList.remove('from');
+  };
+  /** Animate to the `.from` pose, then remove — unless something brought it back in the meantime. */
+  const leave = (el: HTMLElement) => {
+    el.classList.add('from');
+    setTimeout(() => el.classList.contains('from') && el.remove(), 300);
+  };
+
   const render = () => {
+    // Reduced motion still animates: the CSS swaps movement for a plain fade.
+    const animate = animateNext;
+    animateNext = false;
     const count = changes().count + (css.dirty ? 1 : 0);
     if (!state.open) {
       cancelPick?.();
       cancelPick = null;
       css.clearStage();
-      panel?.remove();
+      if (panel) animate ? leave(panel) : panel.remove();
       panel = null;
       structure = '';
       if (!launcher) {
-        launcher = h('button', { className: 'launcher', type: 'button', title: 'Open Gradier (Alt+G)', onclick: () => setOpen(true) });
+        launcher = h('button', { className: 'launcher', type: 'button', title: 'Open Gradier (Alt+G)', onclick: () => setOpen(true, true) });
         launcher.style.pointerEvents = 'auto';
         root.append(launcher);
+        if (animate) enter(launcher);
       }
       launcher.innerHTML = `<span class="logo"></span>Gradier${count ? '<span class="dot"></span>' : ''}`;
-      toolbar.el.remove();
+      animate ? leave(toolbar.el) : toolbar.el.remove();
       stage.replaceChildren();
       overlays.clear();
       clearHandles();
@@ -914,13 +981,18 @@ function boot() {
       const scroll = panel?.querySelector('.body')?.scrollTop ?? 0;
       const next = buildPanel(g);
       next.style.pointerEvents = 'auto';
+      const opening = !panel;
       panel ? panel.replaceWith(next) : root.append(next);
       panel = next;
+      if (opening && animate) enter(panel);
       panel.querySelector('.body')!.scrollTop = scroll;
     }
     const showToolbar = state.mode === 'mesh' && !cancelPick && !!g;
     if (showToolbar) {
-      if (!toolbar.el.isConnected) root.append(toolbar.el);
+      if (!toolbar.el.isConnected) {
+        root.append(toolbar.el);
+        if (animate) enter(toolbar.el);
+      } else toolbar.el.classList.remove('from');
       toolbar.patch({ tool: state.tool, handlesHidden: state.handlesHidden });
     } else toolbar.el.remove();
     if (state.mode === 'css') css.patch();
