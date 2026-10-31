@@ -564,7 +564,17 @@ function boot() {
       max: BLEND_MODES.length - 1,
       step: 1,
       'aria-label': 'Blend mode',
-      oninput: (e: Event) => update((d) => void (d.blendMode = BLEND_MODES[Number((e.target as HTMLInputElement).value)]![0]), 'blendMode'),
+      oninput: (e: Event) => {
+        const mode = BLEND_MODES[Number((e.target as HTMLInputElement).value)]![0];
+        const node = state.point;
+        update((d) => {
+          const target = node !== null ? d.points[node] : undefined;
+          if (target) return void (target.blendMode = mode);
+          // No node selected: the whole gradient, clearing per-node modes so it really applies to all.
+          d.blendMode = mode;
+          for (const p of d.points) delete p.blendMode;
+        }, `blendMode-${node ?? 'all'}`);
+      },
     });
     refs.blend = [input, out];
     return h('label', { className: 'slider', title: 'Drag to go through the blend modes' }, h('span', {}, 'Blend mode'), input, out);
@@ -891,7 +901,8 @@ function boot() {
         out.value = v.toFixed(def.digits);
       }
       if (refs.blend) {
-        const idx = BLEND_MODES.findIndex(([m]) => m === look(g, 'blendMode'));
+        const node = state.point !== null ? g.points[state.point] : undefined;
+        const idx = BLEND_MODES.findIndex(([m]) => m === (node?.blendMode ?? look(g, 'blendMode')));
         if (shadow.activeElement !== refs.blend[0]) refs.blend[0].value = String(idx);
         refs.blend[1].value = BLEND_MODES[idx]![1];
       }
