@@ -105,7 +105,18 @@ vec2 pathPoint(int i, int k) {
   return v * 2.0 - 0.5;
 }
 
-float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+// Sine-free hashes (after Dave Hoskins, MIT). The classic fract(sin(dot(...)) * 43758.5453) loses precision on
+// many GPUs once pixel coordinates get large, which shows up as diagonal stripes in the grain.
+vec4 hash42(vec2 p) {
+  vec4 p4 = fract(vec4(p.xyxy) * vec4(0.1031, 0.1030, 0.0973, 0.1099));
+  p4 += dot(p4, p4.wzxy + 33.33);
+  return fract((p4.xxyz + p4.yzzw) * p4.zywx);
+}
+// Two independent rounds so neighbouring cells don't share structure.
+vec4 grainNoise(vec2 cell, float seed) {
+  vec4 a = hash42(cell + seed * vec2(37.17, 91.73));
+  return hash42(a.xy * 4096.0 + a.zw * 512.0 + cell.yx);
+}
 
 vec3 oklabToLinear(vec3 c) {
   float l_ = c.x + 0.3963377774 * c.y + 0.2158037573 * c.z;
@@ -171,21 +182,24 @@ void main() {
   lab.x *= u_filter.z;
   vec3 col = linearToSrgb(oklabToLinear(lab));
 
-  // Film grain.
-  float seed = fract(u_time) * 100.0;
+  // Film grain: every value comes from its own channel of an independent hash, so there is no shared pattern.
+  float seed = floor(fract(u_time) * 64.0);
   vec2 cell = floor(gl_FragCoord.xy / max(u_grainOpts.y, 1.0));
-  float amount = u_grain * 0.35 * max(u_grainOpts.z, 1.0);
-  float coverage = step(hash(cell * 1.731 + seed + 4.7), min(u_grainOpts.z, 1.0));
-  float r = hash(cell + seed) - 0.5;
+  vec4 h1 = grainNoise(cell, seed);
+  vec4 h2 = grainNoise(cell + vec2(1913.0, 2971.0), seed);
+  float amount = u_grain * 0.3 * max(u_grainOpts.z, 1.0);
+  float coverage = step(h2.w, min(u_grainOpts.z, 1.0));
+  // Sum of two uniforms: a soft, film-like distribution in [-1, 1] instead of a flat one.
+  float r = (h1.x + h2.x - 1.0);
   vec3 grain = vec3(r);
   if (u_grainOpts.x > 1.5) {
-    grain = vec3(r, hash(cell + seed + 13.1) - 0.5, hash(cell + seed + 27.9) - 0.5);
+    grain = vec3(h1.x + h2.x, h1.y + h2.y, h1.z + h2.z) - 1.0;
   } else if (u_grainOpts.x > 0.5) {
-    grain = vec3(r) + (hash(cell + seed + 13.1) - 0.5) * vec3(0.6, 0.1, -0.6);
+    grain = vec3(r) + (h1.y + h2.y - 1.0) * vec3(0.6, 0.1, -0.6);
   }
   col += grain * amount * coverage;
   // Tiny per-pixel dither against banding.
-  col += (hash(gl_FragCoord.xy + seed) - 0.5) * (1.5 / 255.0);
+  col += (hash42(gl_FragCoord.xy + 0.5 + seed * 7.0).w - 0.5) * (1.5 / 255.0);
   gl_FragColor = vec4(col, 1.0);
 }`;
 
