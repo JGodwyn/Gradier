@@ -1,4 +1,4 @@
-import { hexToRgb, look, rgbToHex, type Gradient } from './types';
+import { hexToRgb, rgbToHex, type Gradient, type GradientPoint } from './types';
 
 export type Lab = [number, number, number];
 
@@ -37,31 +37,46 @@ export function oklabToHex([L, A, B]: Lab): string {
   return rgbToHex(enc[0]!, enc[1]!, enc[2]!);
 }
 
-/** The colour-filter settings as the numbers the shader and `applyFilters` use. */
-export function filterParams(g: Gradient) {
-  return {
-    hue: (look(g, 'hue') * Math.PI) / 180,
-    saturation: look(g, 'saturation'),
-    brightness: look(g, 'brightness'),
-    temperature: look(g, 'temperature'),
-  };
+type FilterSource = { hue?: number; saturation?: number; brightness?: number; temperature?: number };
+
+/** Apply hue / saturation / brightness / temperature to an OKLab colour. All four are affine in OKLab, so filtering
+ * each point before blending gives exactly the same result as filtering the blended colour. */
+export function applyFilters([L, A, B]: Lab, f: FilterSource): Lab {
+  const hue = ((f.hue ?? 0) * Math.PI) / 180;
+  const sat = f.saturation ?? 1;
+  const temp = f.temperature ?? 0;
+  const c = Math.cos(hue);
+  const s = Math.sin(hue);
+  const a = (A * c - B * s) * sat + temp * 0.012;
+  const b = (A * s + B * c) * sat + temp * 0.06;
+  return [L * (f.brightness ?? 1), a, b];
 }
 
-/** Apply hue / saturation / brightness / temperature to an OKLab colour (mirrors the shader). */
-export function applyFilters([L, A, B]: Lab, g: Gradient): Lab {
-  const f = filterParams(g);
-  const c = Math.cos(f.hue);
-  const s = Math.sin(f.hue);
-  let a = (A * c - B * s) * f.saturation;
-  let b = (A * s + B * c) * f.saturation;
-  a += f.temperature * 0.012;
-  b += f.temperature * 0.06;
-  return [L * f.brightness, a, b];
+/** A point's colour in OKLab with its own filters and then the gradient's filters applied. */
+export function pointLab(p: GradientPoint, g: Gradient): Lab {
+  return applyFilters(applyFilters(srgbToOklab(p.color), p), g);
 }
 
-/** A point colour with the gradient's filters applied, as hex. */
-export function filteredHex(hex: string, g: Gradient): string {
-  const f = filterParams(g);
-  if (!f.hue && f.saturation === 1 && f.brightness === 1 && !f.temperature) return hex;
-  return oklabToHex(applyFilters(srgbToOklab(hex), g));
+const isPlain = (f: FilterSource) => !f.hue && (f.saturation ?? 1) === 1 && (f.brightness ?? 1) === 1 && !f.temperature;
+
+/** A point colour with its own and the gradient's filters applied, as hex. */
+export function filteredHex(p: GradientPoint, g: Gradient): string {
+  return isPlain(p) && isPlain(g) ? p.color : oklabToHex(pointLab(p, g));
 }
+
+/** OKLab → linear sRGB (unclamped). */
+export function oklabToLinear([L, A, B]: Lab): Lab {
+  const l = (L + 0.3963377774 * A + 0.2158037573 * B) ** 3;
+  const m = (L - 0.1055613458 * A - 0.0638541728 * B) ** 3;
+  const s = (L - 0.0894841775 * A - 1.291485548 * B) ** 3;
+  return [
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
+  ];
+}
+
+export const encodeSrgb = (c: number) => {
+  const v = Math.min(1, Math.max(0, c));
+  return v <= 0.0031308 ? v * 12.92 : 1.055 * v ** (1 / 2.4) - 0.055;
+};

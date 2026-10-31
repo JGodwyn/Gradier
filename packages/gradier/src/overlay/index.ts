@@ -5,6 +5,7 @@ import { getGradient, getGradients, mountedElements, registerGradients, removeGr
 import { arcSamples, bendPath, cumulative, defaultBulge, pointAlong, samplePath, simplifyStroke } from '../core/geometry';
 import {
   AREA_RADIUS,
+  BLEND_MODES,
   defaultArms,
   isValidName,
   MAX_PATH_POINTS,
@@ -50,10 +51,12 @@ interface SliderDef {
   digits: number;
   /** Displayed value = stored value × scale. */
   scale?: number;
+  /** Applies to the selected node when one is selected, otherwise to all nodes. */
+  scoped?: boolean;
 }
 
 const BLEND_SLIDERS: SliderDef[] = [
-  { key: 'softness', label: 'Softness', min: 0, max: 1, step: 0.01, digits: 2 },
+  { key: 'softness', label: 'Softness', min: 0, max: 1, step: 0.01, digits: 2, scoped: true },
   { key: 'warp', label: 'Warp', min: 0, max: 1, step: 0.01, digits: 2 },
   { key: 'warpScale', label: 'Warp size', min: 0, max: 1, step: 0.01, digits: 2 },
   { key: 'speed', label: 'Motion', min: 0, max: 1, step: 0.01, digits: 2 },
@@ -64,10 +67,10 @@ const GRAIN_SLIDERS: SliderDef[] = [
   { key: 'grainDensity', label: 'Density', min: 0, max: 2, step: 0.1, digits: 1 },
 ];
 const FILTER_SLIDERS: SliderDef[] = [
-  { key: 'hue', label: 'Hue', min: -180, max: 180, step: 1, digits: 0 },
-  { key: 'saturation', label: 'Saturation', min: 0, max: 2, step: 0.01, digits: 2 },
-  { key: 'brightness', label: 'Brightness', min: 0, max: 2, step: 0.01, digits: 2 },
-  { key: 'temperature', label: 'Temperature', min: -100, max: 100, step: 1, digits: 0, scale: 100 },
+  { key: 'hue', label: 'Hue', min: -180, max: 180, step: 1, digits: 0, scoped: true },
+  { key: 'saturation', label: 'Saturation', min: 0, max: 2, step: 0.01, digits: 2, scoped: true },
+  { key: 'brightness', label: 'Brightness', min: 0, max: 2, step: 0.01, digits: 2, scoped: true },
+  { key: 'temperature', label: 'Temperature', min: -100, max: 100, step: 1, digits: 0, scale: 100, scoped: true },
 ];
 const ALL_SLIDERS = [...BLEND_SLIDERS, ...GRAIN_SLIDERS, ...FILTER_SLIDERS];
 
@@ -139,6 +142,7 @@ function boot() {
     coords: HTMLElement[];
     sliders: Map<string, [HTMLInputElement, HTMLOutputElement]>;
     segs: Map<string, HTMLButtonElement[]>;
+    blend?: [HTMLInputElement, HTMLOutputElement];
     exportW?: HTMLElement;
     exportH?: HTMLElement;
     status?: HTMLElement;
@@ -439,7 +443,7 @@ function boot() {
   const section = (
     id: string,
     title: string,
-    opts: { collapsible?: boolean; open?: boolean; actions?: Node[] },
+    opts: { collapsible?: boolean; open?: boolean; actions?: Node[]; peek?: Array<Node | null> },
     ...children: Array<Node | null | false>
   ) => {
     const open = !opts.collapsible || sectionOpen(id, opts.open ?? true);
@@ -449,10 +453,11 @@ function boot() {
       'div',
       { className: `label${opts.collapsible ? ' toggle' : ''}` },
       h('span', { className: 'grow' }, title),
-      ...(open ? (opts.actions ?? []) : []),
+      ...(open || opts.peek ? (opts.actions ?? []) : []),
       opts.collapsible ? chevron : null,
     );
-    const el = h('div', { className: `section${open ? '' : ' closed'}` }, label, ...(open ? children : []));
+    // `peek` is what a closed section still shows (e.g. just the selected point).
+    const el = h('div', { className: `section${open ? '' : ' closed'}` }, label, ...(open ? children : (opts.peek ?? [])));
     if (opts.collapsible) {
       label.addEventListener('click', (e) => {
         if ((e.target as HTMLElement).closest('button')) return;
@@ -473,13 +478,50 @@ function boot() {
       min: def.min,
       max: def.max,
       step: def.step,
-      oninput: (e: Event) =>
+      oninput: (e: Event) => {
+        const v = Number((e.target as HTMLInputElement).value) / (def.scale ?? 1);
+        const node = def.scoped ? state.point : null;
         update((d) => {
-          (d as unknown as Record<string, number>)[def.key] = Number((e.target as HTMLInputElement).value) / (def.scale ?? 1);
-        }, def.key),
+          const target = node !== null ? d.points[node] : undefined;
+          if (target) return void ((target as unknown as Record<string, number>)[def.key] = v);
+          // No node selected: set it for the whole gradient and drop per-node overrides so it applies to all.
+          (d as unknown as Record<string, number>)[def.key] = v;
+          if (def.scoped) for (const p of d.points) delete (p as unknown as Record<string, unknown>)[def.key];
+        }, `${def.key}-${node ?? 'all'}`);
+      },
     });
     refs.sliders.set(def.key, [input, out]);
     return h('label', { className: 'slider' }, h('span', {}, def.label), input, out);
+  };
+
+  /** Value a slider shows: the selected node's own value for scoped controls, else the gradient's. */
+  const sliderValue = (g: Gradient, def: SliderDef) => {
+    const node = def.scoped && state.point !== null ? g.points[state.point] : undefined;
+    if (node) {
+      const own = (node as unknown as Record<string, number | undefined>)[def.key];
+      if (own !== undefined) return own;
+      return def.key === 'softness' ? g.softness : LOOK_DEFAULTS[def.key as LookNumKey];
+    }
+    return numValue(g, def.key);
+  };
+
+  /** "Node 3" or "All nodes": shows what the scoped controls in a section will change. */
+  const scopeChip = () =>
+    h('span', { className: `scope${state.point !== null ? ' node' : ''}` }, state.point !== null ? `Node ${state.point + 1}` : 'All nodes');
+
+  /** Blend mode: a stepped field slider; drag (or use the arrow keys) to go through every mode. */
+  const blendRow = () => {
+    const out = h('output', {});
+    const input = h('input', {
+      type: 'range',
+      min: 0,
+      max: BLEND_MODES.length - 1,
+      step: 1,
+      'aria-label': 'Blend mode',
+      oninput: (e: Event) => update((d) => void (d.blendMode = BLEND_MODES[Number((e.target as HTMLInputElement).value)]![0]), 'blendMode'),
+    });
+    refs.blend = [input, out];
+    return h('label', { className: 'slider', title: 'Drag to go through the blend modes' }, h('span', {}, 'Blend mode'), input, out);
   };
 
   /** A row of toggle buttons; `refs.segs` lets `patch` mark the active one. */
@@ -636,9 +678,9 @@ function boot() {
           },
         });
         const coords = h('span', { className: 'coords' });
-        refs.swatches.push(color);
-        refs.hexes.push(hex);
-        refs.coords.push(coords);
+        refs.swatches[i] = color;
+        refs.hexes[i] = hex;
+        refs.coords[i] = coords;
         const kind = p.shape ? { line: 'Line', arc: 'Arc', path: 'Stroke' }[p.shape.type] : '';
         const row = h(
           'div',
@@ -646,8 +688,9 @@ function boot() {
             className: 'point',
             title: kind ? `${kind} point` : 'Point',
             onpointerdown: () => {
+              if (state.point === i) return;
               state.point = i;
-              patch(getGradient(state.selected!));
+              render();
             },
           },
           h('label', { className: 'swatch' }, color),
@@ -655,18 +698,26 @@ function boot() {
           coords,
           button('icon ghost small', ICONS.trash, 'Remove point', () => removePoint(i)),
         );
-        refs.rows.push(row);
+        refs.rows[i] = row;
         list.append(row);
       });
+      const selectedRow = state.point !== null ? refs.rows[state.point] : undefined;
       body.append(
         section(
           'points',
           `Points  ${g.points.length}/${MAX_POINTS}`,
-          { collapsible: true, actions: [h('button', { className: 'btn small', type: 'button', onclick: () => addPoint() }, '+ Add')] },
+          {
+            collapsible: true,
+            open: false,
+            actions: [h('button', { className: 'btn small', type: 'button', onclick: () => addPoint() }, '+ Add')],
+            peek: [
+              selectedRow ? h('div', { className: 'points' }, selectedRow) : h('div', { className: 'hint' }, 'No node selected: controls marked “All nodes” change every node. Click a node to edit just that one.'),
+            ],
+          },
           list,
           h('div', { className: 'hint' }, 'Drag the handles on the page. Use the toolbar below to add nodes, lines, arcs and strokes.'),
         ),
-        section('blend', 'Blend', { collapsible: true }, ...BLEND_SLIDERS.map(sliderRow)),
+        section('blend', 'Blend', { collapsible: true, actions: [scopeChip()] }, sliderRow(BLEND_SLIDERS[0]!), blendRow(), ...BLEND_SLIDERS.slice(1).map(sliderRow)),
         section(
           'grain',
           'Grain',
@@ -682,9 +733,12 @@ function boot() {
           {
             collapsible: true,
             actions: [
-              button('icon ghost small', ICONS.reset, 'Reset filters', () =>
+              scopeChip(),
+              button('icon ghost small', ICONS.reset, state.point !== null ? 'Reset this node\'s filters' : 'Reset filters for all nodes', () =>
                 update((d) => {
-                  for (const def of FILTER_SLIDERS) delete (d as unknown as Record<string, unknown>)[def.key];
+                  const node = state.point !== null ? d.points[state.point] : undefined;
+                  const targets: object[] = node ? [node] : [d, ...d.points];
+                  for (const t of targets) for (const def of FILTER_SLIDERS) delete (t as Record<string, unknown>)[def.key];
                 }),
               ),
             ],
@@ -781,9 +835,14 @@ function boot() {
         const pair = refs.sliders.get(def.key);
         if (!pair) continue;
         const [input, out] = pair;
-        const v = numValue(g, def.key) * (def.scale ?? 1);
+        const v = sliderValue(g, def) * (def.scale ?? 1);
         if (shadow.activeElement !== input) input.value = String(v);
         out.value = v.toFixed(def.digits);
+      }
+      if (refs.blend) {
+        const idx = BLEND_MODES.findIndex(([m]) => m === look(g, 'blendMode'));
+        if (shadow.activeElement !== refs.blend[0]) refs.blend[0].value = String(idx);
+        refs.blend[1].value = BLEND_MODES[idx]![1];
       }
       const active: Record<string, string> = { grainType: look(g, 'grainType'), scale: String(state.exportScale) };
       for (const [id, buttons] of refs.segs) for (const b of buttons) b.classList.toggle('on', b.dataset.value === active[id]);
@@ -842,6 +901,7 @@ function boot() {
       !!cancelPick,
       state.mode === 'css' ? css.structureKey() : '',
       state.selected,
+      state.point,
       state.dock,
       state.connected,
       state.loaded,
@@ -1323,6 +1383,18 @@ function boot() {
       const r = el.getBoundingClientRect();
       const at = { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
       addPoint(at.x, at.y, sampleColor(el, at) ?? undefined);
+    },
+    true,
+  );
+
+  // Clicking anywhere on the page that isn't one of Gradier's own controls deselects the node.
+  window.addEventListener(
+    'pointerdown',
+    (e) => {
+      if (!state.open || state.mode !== 'mesh' || state.point === null || cancelPick) return;
+      if (e.composedPath().includes(host)) return;
+      state.point = null;
+      render();
     },
     true,
   );

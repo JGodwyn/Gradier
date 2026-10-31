@@ -1,6 +1,6 @@
 import { arcSamples, samplePath, type Vec } from './geometry';
-import { filterParams, srgbToOklab } from './color';
-import { ARM_LENGTH, look, MAX_POINTS, type Gradient } from './types';
+import { encodeSrgb, oklabToLinear, pointLab } from './color';
+import { ARM_LENGTH, look, MAX_POINTS, type BlendMode, type Gradient } from './types';
 
 /** Samples per curve in the path texture. */
 const PATH_N = 32;
@@ -31,14 +31,17 @@ uniform vec4 u_armAng[${MAX_POINTS}];
 uniform vec4 u_armLen[${MAX_POINTS}];
 // curve samples: one row per point, 16-bit x/y packed into RGBA
 uniform sampler2D u_paths;
-uniform float u_power;
+// per-point falloff exponent (lower = softer)
+uniform float u_power[${MAX_POINTS}];
+// 0 OKLab, 1 linear RGB, 2 sRGB: the space u_col is in and colours are mixed in
+uniform int u_space;
+// 0 none, 1 screen, 2 multiply, 3 overlay, 4 soft light: a contrast curve applied to the mixed colour
+uniform int u_curve;
 uniform float u_warp;
 uniform float u_warpScale;
 uniform float u_grain;
 // x: type (0 mono, 1 duo, 2 multi), y: cell size in device pixels, z: density
 uniform vec3 u_grainOpts;
-// x: hue (radians), y: saturation, z: brightness, w: temperature
-uniform vec4 u_filter;
 
 const int PATH_N = ${PATH_N};
 
@@ -168,19 +171,18 @@ void main() {
       }
     }
     dist /= meta.y;
-    float w = pow(dist * dist + 1e-5, -u_power * 0.5);
+    float w = pow(dist * dist + 1e-5, -u_power[i] * 0.5);
     sum += u_col[i] * w;
     total += w;
   }
 
-  // Colour filters, in OKLab.
-  vec3 lab = sum / total;
-  float hc = cos(u_filter.x), hs = sin(u_filter.x);
-  lab.yz = vec2(lab.y * hc - lab.z * hs, lab.y * hs + lab.z * hc) * u_filter.y;
-  lab.y += u_filter.w * 0.012;
-  lab.z += u_filter.w * 0.06;
-  lab.x *= u_filter.z;
-  vec3 col = linearToSrgb(oklabToLinear(lab));
+  // Colours arrive already filtered; mix them in the chosen space.
+  vec3 mixed = sum / total;
+  vec3 col = u_space == 0 ? linearToSrgb(oklabToLinear(mixed)) : u_space == 1 ? linearToSrgb(mixed) : clamp(mixed, 0.0, 1.0);
+  if (u_curve == 1) col = 1.0 - (1.0 - col) * (1.0 - col);
+  else if (u_curve == 2) col = col * col;
+  else if (u_curve == 3) col = mix(2.0 * col * col, 1.0 - 2.0 * (1.0 - col) * (1.0 - col), step(0.5, col));
+  else if (u_curve == 4) col = col * col * (3.0 - 2.0 * col);
 
   // Film grain: every value comes from its own channel of an independent hash, so there is no shared pattern.
   float seed = floor(fract(u_time) * 64.0);
@@ -211,6 +213,17 @@ const DEFAULT_ARMS: Array<[number, number]> = [
 ];
 
 const GRAIN_TYPES = { mono: 0, duo: 1, multi: 2 } as const;
+
+/** Blend mode → [mixing space, contrast curve] (see u_space / u_curve in the shader). */
+const BLEND: Record<BlendMode, [number, number]> = {
+  oklab: [0, 0],
+  linear: [1, 0],
+  normal: [2, 0],
+  screen: [0, 1],
+  multiply: [0, 2],
+  overlay: [0, 3],
+  softlight: [0, 4],
+};
 
 /** Renders a mesh gradient into a canvas with WebGL. */
 export class MeshRenderer {
@@ -267,7 +280,7 @@ export class MeshRenderer {
 
     for (const name of [
       'u_res', 'u_time', 'u_count', 'u_pos', 'u_col', 'u_meta', 'u_ends', 'u_armAng', 'u_armLen', 'u_paths',
-      'u_power', 'u_warp', 'u_warpScale', 'u_grain', 'u_grainOpts', 'u_filter',
+      'u_power', 'u_space', 'u_curve', 'u_warp', 'u_warpScale', 'u_grain', 'u_grainOpts',
     ]) {
       this.uniforms[name] = gl.getUniformLocation(p, name);
     }
@@ -307,12 +320,17 @@ export class MeshRenderer {
     const sy = 1 / sx;
     const toScaled = (p: Vec, dx: number, dy: number) => ({ x: (p.x + dx) * sx, y: (p.y + dy) * sy });
     const data = this.pathData;
+    const [space, curve] = BLEND[look(g, 'blendMode')];
+    const power = new Float32Array(MAX_POINTS).fill(3.75);
     g.points.slice(0, count).forEach((pt, i) => {
       const dx = drift * Math.sin(t * 0.6 + i * 1.7);
       const dy = drift * Math.cos(t * 0.5 + i * 2.3);
       pos[i * 2] = pt.x + dx;
       pos[i * 2 + 1] = pt.y + dy;
-      col.set(srgbToOklab(pt.color), i * 3);
+      const lab = pointLab(pt, g);
+      col.set(space === 0 ? lab : space === 1 ? oklabToLinear(lab) : oklabToLinear(lab).map(encodeSrgb), i * 3);
+      // Higher softness = lower exponent = wider, gentler falloff.
+      power[i] = 6 - (pt.softness ?? g.softness) * 4.5;
       meta[i * 3 + 1] = pt.radius ?? 1;
       const sh = pt.shape;
       if (sh) {
@@ -354,7 +372,6 @@ export class MeshRenderer {
     gl.uniform1i(u.u_paths!, 0);
 
     const px = canvas.clientWidth ? canvas.width / canvas.clientWidth : this.pixelScale;
-    const f = filterParams(g);
     gl.uniform2f(u.u_res!, canvas.width || 1, canvas.height || 1);
     gl.uniform1f(u.u_time!, t);
     gl.uniform1i(u.u_count!, count);
@@ -364,12 +381,13 @@ export class MeshRenderer {
     gl.uniform2fv(u.u_ends!, ends);
     gl.uniform4fv(u.u_armAng!, armAng);
     gl.uniform4fv(u.u_armLen!, armLen);
-    gl.uniform1f(u.u_power!, 1.5 + g.softness * 4.5);
+    gl.uniform1fv(u.u_power!, power);
+    gl.uniform1i(u.u_space!, space);
+    gl.uniform1i(u.u_curve!, curve);
     gl.uniform1f(u.u_warp!, g.warp);
     gl.uniform1f(u.u_warpScale!, g.warpScale);
     gl.uniform1f(u.u_grain!, g.grain);
     gl.uniform3f(u.u_grainOpts!, GRAIN_TYPES[look(g, 'grainType')], look(g, 'grainSize') * px, look(g, 'grainDensity'));
-    gl.uniform4f(u.u_filter!, f.hue, f.saturation, f.brightness, f.temperature);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
