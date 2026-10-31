@@ -1,0 +1,15 @@
+{
+  "name": "gradier-monorepo",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w gradier",
+    "dev": "npm run dev -w gradier",
+    "typecheck": "npm run typecheck -w gradier",
+    "example": "npm run build && npm run dev -w vite-vanilla-example",
+    "example:react": "npm run build && npm run dev -w vite-react-example"
+  }
+}
