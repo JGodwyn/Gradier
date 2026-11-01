@@ -1,56 +1,51 @@
 ---
 name: gradier
-description: Set up and use Gradier, a dev-only tool that lets someone point at any gradient on their running website, edit it visually, and save the change straight back into the source code. Use when the user asks to install or configure Gradier, add a visual gradient editor to their dev site, troubleshoot the Gradier overlay or save server, apply a "Gradier edit request" they pasted, or add Gradier mesh gradients (`<gradier-gradient>`) to a page.
+description: Set up and use Gradier, a dev-only visual gradient editor that saves edits straight back into a project's source code, plus a small WebGL mesh-gradient runtime. Use when the user wants to install or configure Gradier, add a visual gradient editor to their dev site, edit or create gradients on a website, add or change a mesh gradient (`<gradier-gradient>`, `gradients.json`), apply a "Gradier edit request" they pasted, explain how to use the Gradier editor, or troubleshoot its overlay or save server.
 ---
 
 # Gradier
 
-Gradier injects an editor overlay into a website **in development only**:
+Gradier adds an editor overlay to a website **during development only**:
 
-- **Pick any CSS gradient** (<kbd>Alt</kbd>+<kbd>P</kbd>): `linear-`, `radial-`, `conic-` and `repeating-*` gradients on any element or its `::before`/`::after`, including multi-layer backgrounds. The user edits stops, colours, angle, type and position on the page, then saves. Gradier finds where that gradient is written in the project (CSS/SCSS/Less, `<style>`, HTML, inline `style`, JSX/TSX/Vue/Svelte/Astro string literals) and rewrites **only that gradient's text** in place.
-- **Mesh gradients** (<kbd>Alt</kbd>+<kbd>G</kbd>): an optional WebGL `<gradier-gradient name="…">` web component whose data lives in a JSON file (default `src/gradients.json`) that the overlay writes to.
+- **CSS gradients** (<kbd>Alt</kbd>+<kbd>P</kbd>, then click any gradient on the page): `linear-`, `radial-`, `conic-` and `repeating-*` gradients on any element or its `::before`/`::after`. The user edits it visually and saves; Gradier finds where that gradient is written in the project and rewrites **only that gradient's text** in place.
+- **Mesh gradients** (<kbd>Alt</kbd>+<kbd>G</kbd>): a WebGL `<gradier-gradient name="…">` element whose data lives in a JSON file (default `src/gradients.json`). The user shapes it with colour points, lines, arcs and freehand strokes, then saves to that file. This small runtime (about 11 kB gzipped, with a CSS fallback) is the only part that ships to production.
 
-It has two parts that must both be wired up:
+Two parts must both be wired up in development:
 
-1. **The overlay script**: `/__gradier/overlay.js`, loaded into the page during development.
-2. **The save server**: HTTP endpoints under `/__gradier/` that read and write project files. Either the Vite plugin provides them on the Vite dev server, or the standalone CLI (`gradier serve`, default `http://localhost:4747`) does.
+1. **The overlay script** at `/__gradier/overlay.js`.
+2. **The save server**: HTTP endpoints under `/__gradier/` that read and write project files. The Vite plugin provides them on the Vite dev server; for anything else, the CLI (`gradier serve`, default `http://localhost:4747`) does.
 
-Never ship either part to production. Only the optional mesh runtime (`import 'gradier'`) is meant for production.
+Never ship either part to production.
+
+Reference files in this skill (read them when the task needs them):
+
+- [MESH.md](MESH.md): the mesh gradient JSON format, writing or changing gradients in code, and the runtime API.
+- [EDITOR.md](EDITOR.md): every editor control and shortcut, for explaining to the user how to do something.
 
 ## 1. Inspect the project first
-
-Before changing anything, work out:
 
 | Question | How to check |
 | --- | --- |
 | Package manager | Lockfile: `package-lock.json` → npm, `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, `bun.lockb`/`bun.lock` → bun |
-| Dev server / framework | `package.json` deps & `scripts.dev`; config files: `vite.config.*`, `next.config.*`, `nuxt.config.*`, `astro.config.*`, `svelte.config.*`, `angular.json`, `webpack.config.*`, `remix.config.*`, `Gemfile`, `manage.py`, `composer.json` |
-| Who serves the HTML in dev? | Vite SPA (an `index.html` that Vite serves) vs. a framework/server that renders HTML (Next, Nuxt, Astro, SvelteKit, Remix/React Router, Laravel, Rails, Django, PHP, static site generators) |
-| Where styles live | `src/**/*.css`, Tailwind config, CSS-in-JS. This sets expectations for what can be auto-saved (see §5) |
-| Monorepo? | Workspaces in root `package.json`, `pnpm-workspace.yaml`, `turbo.json`. Decide which directory Gradier should scan (`root`) |
+| Dev server / framework | `package.json` deps and `scripts.dev`; config files: `vite.config.*`, `next.config.*`, `nuxt.config.*`, `astro.config.*`, `svelte.config.*`, `angular.json`, `webpack.config.*`, `Gemfile`, `manage.py`, `composer.json` |
+| Who serves the HTML in dev? | A Vite single-page app (Vite serves `index.html`) vs. a framework or server that renders HTML (Next, Nuxt, Astro, SvelteKit, Remix/React Router, Laravel, Rails, Django, PHP, static site generators) |
+| Mesh gradients needed? | Only if the user wants the WebGL `<gradier-gradient>` effect. Editing existing CSS gradients doesn't need it |
+| Monorepo? | Workspaces in the root `package.json`, `pnpm-workspace.yaml`, `turbo.json`. Decide which directory Gradier should scan (`root`) |
 
-## 2. Install the package
-
-Install as a **dev dependency** unless the project will use mesh gradients in production (then a regular dependency):
+## 2. Install
 
 ```bash
-npm i -D gradier        # or: pnpm add -D gradier / yarn add -D gradier / bun add -d gradier
+npm i gradier       # mesh gradients: the runtime ships, so a normal dependency
+npm i -D gradier    # CSS gradients only: everything is dev-only
 ```
 
-If `npm view gradier version` fails (not published yet), build it from source:
-
-```bash
-git clone https://github.com/jgodwyn/gradier /tmp/gradier-src
-cd /tmp/gradier-src && npm install && npm run build && cd packages/gradier && npm pack
-# then, in the user's project:
-npm i -D /tmp/gradier-src/packages/gradier/gradier-*.tgz
-```
+(`pnpm add [-D] gradier`, `yarn add [-D] gradier`, `bun add [-d] gradier`.)
 
 ## 3. Wire it up (pick ONE path)
 
-### Path A: Vite single-page apps (Vite serves `index.html`)
+### Path A: Vite single-page apps
 
-Covers vanilla, React, Preact, Vue, Svelte, Solid and Lit apps created with Vite. Add the plugin; it injects the overlay into `index.html` and serves the API on the same origin. It is `apply: 'serve'`, so `vite build` is untouched.
+Covers vanilla, React, Preact, Vue, Svelte, Solid and Lit apps where Vite serves `index.html`. The plugin injects the overlay and serves the API on the same origin. It is `apply: 'serve'`, so `vite build` is untouched.
 
 ```js
 // vite.config.(js|ts)
@@ -60,16 +55,16 @@ import gradier from 'gradier/vite';
 export default defineConfig({
   plugins: [
     // keep existing plugins
-    gradier({ file: 'src/gradients.json' }), // file = where mesh gradients are stored
+    gradier({ file: 'src/gradients.json' }), // where mesh gradients are stored
   ],
 });
 ```
 
-Nothing else is required to edit CSS gradients. The plugin scans Vite's `root` for source files; override it with `gradier({ root: '..' })`.
+That's all for CSS gradients. Options: `root` (directory to scan and write, relative to Vite's root), `allowedOrigins` (see Troubleshooting).
 
-### Path B: everything else (Next.js, Nuxt, Astro, SvelteKit, Remix/React Router, Angular, webpack, Laravel, Rails, Django, PHP, static HTML…)
+### Path B: everything else
 
-Run the standalone save server from the **project root** next to the normal dev server, and load the overlay from it in development only.
+Next.js, Nuxt, Astro, SvelteKit, Remix/React Router, Angular, webpack, Laravel, Rails, Django, PHP, static HTML. Run the standalone save server from the **project root** next to the normal dev server, and load the overlay from it in development only.
 
 1. Add a script to `package.json` (don't rewrite the user's existing `dev` script unless they ask):
 
@@ -79,7 +74,7 @@ Run the standalone save server from the **project root** next to the normal dev 
    }
    ```
 
-   Options: `--root <dir>` (directory to scan and write; default cwd), `--port 4747`, `--file <json>`, `--origin <url>` (repeatable; needed when the dev site isn't on `localhost`/`127.0.0.1`/`*.localhost`, e.g. `--origin http://myapp.test`).
+   Options: `--root <dir>` (directory to scan and write; default cwd), `--port 4747`, `--file <json>`, `--origin <url>` (repeatable; needed when the dev site isn't on `localhost`, `127.0.0.1` or `*.localhost`, e.g. `--origin http://myapp.test`).
 
    If the project already uses `concurrently` or `npm-run-all`, you may offer to add Gradier to the dev command. Otherwise tell the user to run `npm run gradier` in a second terminal.
 
@@ -94,7 +89,7 @@ Run the standalone save server from the **project root** next to the normal dev 
    )}
    ```
 
-   **Next.js Pages Router** (`pages/_app.tsx`): the same `<Script>` element, rendered next to `<Component {...pageProps} />`.
+   **Next.js Pages Router** (`pages/_app.tsx`): the same `<Script>` element, next to `<Component {...pageProps} />`.
 
    **Nuxt** (`nuxt.config.ts`):
    ```ts
@@ -129,7 +124,7 @@ Run the standalone save server from the **project root** next to the normal dev 
 
    **Plain static HTML**: add the tag and remind the user to remove it before deploying, or serve it only from a dev-only include.
 
-Alternatives in Path B: an Express or webpack-dev-server setup can mount the API on its own origin instead of running the CLI:
+An Express or webpack-dev-server setup can mount the API on its own origin instead of running the CLI, then load `/__gradier/overlay.js` from that origin:
 
 ```js
 import { createGradierMiddleware } from 'gradier/server';
@@ -137,39 +132,53 @@ app.use(createGradierMiddleware({ root: process.cwd(), file: 'src/gradients.json
 // webpack-dev-server: setupMiddlewares: (mws, devServer) => { devServer.app.use(createGradierMiddleware()); return mws; }
 ```
 
-Then load `/__gradier/overlay.js` from that same origin.
+### Mesh gradients (either path)
+
+Register the saved gradients once, then place elements by name. Details and the data format are in [MESH.md](MESH.md).
+
+```js
+import { registerGradients } from 'gradier';     // also defines <gradier-gradient>
+import gradients from './gradients.json';        // create it as {} if it doesn't exist
+registerGradients(gradients);
+```
+
+```html
+<gradier-gradient name="hero" style="display:block;min-height:60vh">…content on top…</gradier-gradient>
+```
+
+React: `import { Gradient, registerGradients } from 'gradier/react'`, then `<Gradient name="hero" style={{ minHeight: '60vh' }} />`. It renders a CSS fallback on the server; in Next.js put it in a client component (`'use client'`). TypeScript needs `"resolveJsonModule": true` to import the JSON. A name that isn't in the file yet shows in the editor as a yellow "click to create" label.
 
 ### Monorepos
 
-The server only scans and writes inside `root`, and skips `node_modules`, `dist`, `build`, `.next`, `.git`, and other build or hidden directories. If shared styles live in another workspace package (e.g. `packages/ui`), widen the root: `gradier({ root: '../..' })` for the Vite plugin (relative to Vite's root), or `gradier serve --root <repo root>` for the CLI. Note that `file` is resolved against that root.
+The server only scans and writes inside `root`, and skips `node_modules`, `dist`, `build`, `.next`, `.git` and other build or hidden directories. If shared styles live in another workspace package (e.g. `packages/ui`), widen the root: `gradier({ root: '../..' })` for the plugin, or `gradier serve --root <repo root>`. `file` is resolved against that root.
 
-## 4. Verify the setup (do this every time)
+## 4. Verify the setup (every time)
 
 1. Start the dev server (and `npm run gradier` for Path B).
-2. `curl -sI <overlay URL>` returns `200` with `text/javascript`. The URL is `http://localhost:<vite port>/__gradier/overlay.js` (A) or `http://localhost:4747/__gradier/overlay.js` (B).
+2. `curl -sI <overlay URL>` returns `200` with `text/javascript`: `http://localhost:<vite port>/__gradier/overlay.js` (A) or `http://localhost:4747/__gradier/overlay.js` (B).
 3. `curl -s <base>/__gradier/api` returns JSON like `{"file":"src/gradients.json","gradients":{}}`.
-4. If a browser tool is available (e.g. Playwright), open the page and check that `document.getElementById('gradier-overlay')` exists and the console has no `[gradier]` errors. Otherwise tell the user to look for the **Gradier** pill in the bottom-right corner.
-5. Production safety: for Vite, run the build and confirm `grep -r "__gradier" dist/` finds nothing. For other frameworks, confirm the script tag is behind a dev-only condition.
+4. If a browser tool is available (e.g. Playwright), open the page and check `document.getElementById('gradier-overlay')` exists and the console has no `[gradier]` errors. Otherwise tell the user to look for the **Gradier** pill in the bottom-right corner.
+5. Production safety: for Vite, build and confirm `grep -r "__gradier" dist/` finds nothing. For other frameworks, confirm the script tag is behind a dev-only condition.
 
-Tell the user how to use it: **Alt+P** (or the crosshair button) to pick a gradient, edit it, then **Save** or **⌘/Ctrl+S**. The panel's Source row shows the file and line it will write to.
+Then tell the user how to start: **Alt+P** and click a gradient to edit it, or **Alt+G** for mesh gradients; **⌘/Ctrl+S** saves. Point them to [EDITOR.md](EDITOR.md)'s contents for anything more specific they ask.
 
-## 5. What auto-save can and cannot handle
+## 5. What saving CSS gradients can and cannot handle
 
-Gradier matches the gradient the browser shows against gradient text in source files semantically: `#fff` matches `rgb(255, 255, 255)`, `to bottom` matches the default direction, and `var(--x)` matches `var(--x)`. It ranks matches by the stylesheet the rule came from and by the CSS selector. When several places match, the panel lets the user choose one or update all identical copies.
+Gradier matches the gradient the browser shows against gradient text in source files semantically: `#fff` matches `rgb(255, 255, 255)`, `to bottom` matches the default direction, `var(--x)` matches `var(--x)`. It ranks matches by the stylesheet the rule came from and by selector. When several places match, the user picks one or updates all identical copies.
 
-Works: plain CSS / SCSS / Less / PostCSS files, CSS Modules, `<style>` blocks, Vue/Svelte/Astro SFC styles, HTML `style=""`, JSX `style={{ background: '…' }}`, gradient strings in JS/TS (styled-components/emotion **without** `${}` interpolation inside the gradient), and server templates (ERB, Blade, Twig, Jinja/Django, Liquid, Handlebars, EJS, Pug).
+Works: CSS / SCSS / Less / PostCSS files, CSS Modules, `<style>` blocks, Vue/Svelte/Astro styles, HTML `style=""`, JSX `style={{ background: '…' }}`, gradient strings in JS/TS (styled-components/emotion **without** `${}` inside the gradient), and server templates (ERB, Blade, Twig, Jinja/Django, Liquid, Handlebars, EJS, Pug).
 
-Doesn't auto-save. The panel shows "not found" and the user clicks **Copy for AI agent**, which sends the request to you (see §6):
+Doesn't save automatically. The panel shows "not found", and the user clicks **Copy for AI agent**, which hands the request to you (§6):
 - Tailwind gradient utilities (`bg-gradient-to-r from-… via-… to-…`, v4 `bg-linear-*`, `bg-radial`, `bg-conic`).
-- Gradients assembled at runtime (template interpolation, string concatenation, Sass functions/mixins that generate them, JS theme objects split into parts).
+- Gradients assembled at runtime (interpolation, concatenation, Sass functions/mixins, theme objects split into parts).
 - Gradients from `node_modules` / third-party CSS, or CSS served from another origin.
-- Colours or stops coming from a CSS variable that holds the whole gradient (`background: var(--hero-bg)` where the variable is defined elsewhere). Gradier can find the variable's definition only if its text matches; otherwise use §6.
+- A CSS variable holding the whole gradient (`background: var(--hero-bg)`) whose definition text doesn't match.
 
-When the matched source uses `var(--…)` colours, any colour the user changes is written as a literal value. Untouched stops keep their variables.
+When the matched source uses `var(--…)` colours, colours the user changes are written as literal values; untouched stops keep their variables.
 
 ## 6. Applying a "Gradier edit request" (pasted by the user)
 
-The overlay's **Copy for AI agent** button produces text like:
+**Copy for AI agent** produces text like:
 
 ```
 Gradier edit request: update this gradient in the source code.
@@ -186,67 +195,50 @@ New gradient: linear-gradient(120deg, #ff0080 0%, #ffb800 55%, #7928ca 100%)
 To apply it:
 
 1. If `Source:` names a file, open it at that line and replace the **current** gradient text with the **new** one exactly. Keep the surrounding declaration, other background layers, `!important`, fallbacks and formatting.
-2. If the source wasn't found, locate the element. Search for the classes and IDs in `Element:` / `Element classes:` (`rg -n "featured" src`), the component that renders it, and any CSS rule matching the selector path. `Background layer: N of M` says which comma-separated layer of `background`/`background-image` to change. A trailing `::before`/`::after` means the rule is on that pseudo-element.
-3. **Tailwind**: replace only the gradient utilities on that element, and keep variant prefixes (`md:`, `hover:`, `dark:`) on any you change. Two ways to write the new gradient:
-   - Arbitrary value, which always works and is exact: `bg-[linear-gradient(120deg,#ff0080_0%,#ffb800_55%,#7928ca_100%)]`. Spaces become `_`, and there must be no spaces inside the brackets.
-   - Utilities, which are more idiomatic when the gradient fits them. v3: `bg-gradient-to-r from-[#ff0080] via-[#ffb800] via-55% to-[#7928ca]`. v4: `bg-linear-120 from-[#ff0080] via-[#ffb800] via-55% to-[#7928ca]`, with `bg-radial-[at_25%_25%]` and `bg-conic-180` for the other types. Prefer theme colours (`from-pink-500`) only when the hex matches the theme exactly.
-4. **CSS variables / design tokens**: if the old gradient used `var(--token)`, update the token's value only if `rg` shows it isn't used elsewhere. Otherwise change this usage.
+2. If no source was found, locate the element: search for the classes and IDs in `Element:` / `Element classes:` (`rg -n "featured" src`), the component that renders it, and CSS rules matching the selector path. `Background layer: N of M` says which comma-separated layer of `background`/`background-image` to change. A trailing `::before`/`::after` means the rule is on that pseudo-element.
+3. **Tailwind**: replace only the gradient utilities on that element, keeping variant prefixes (`md:`, `hover:`, `dark:`). Either:
+   - an arbitrary value, which is always exact: `bg-[linear-gradient(120deg,#ff0080_0%,#ffb800_55%,#7928ca_100%)]` (spaces become `_`), or
+   - utilities when the gradient fits them. v3: `bg-gradient-to-r from-[#ff0080] via-[#ffb800] via-55% to-[#7928ca]`. v4: `bg-linear-120 from-[#ff0080] via-[#ffb800] via-55% to-[#7928ca]`, with `bg-radial-[at_25%_25%]` and `bg-conic-180` for the other types. Use theme colours (`from-pink-500`) only when the hex matches exactly.
+4. **CSS variables / design tokens**: update the token's value only if `rg` shows it isn't used elsewhere; otherwise change this usage.
 5. **CSS-in-JS with interpolation**: update the underlying constants or theme values so the rendered result equals the new gradient.
-6. Verify: reload the page (or rely on HMR) and confirm the computed `background-image` of the element matches. If you have a browser tool, use `getComputedStyle(el, '::before').backgroundImage`.
+6. Verify: reload (or rely on HMR) and check the element's computed `background-image` matches, e.g. `getComputedStyle(el, '::before').backgroundImage` with a browser tool.
 
-## 7. Mesh gradients (optional)
+## 7. Troubleshooting
 
-A mesh gradient is a WebGL-rendered set of colour points, with a CSS fallback for SSR and no-WebGL. This path needs `gradier` as a regular **dependency**.
-
-```js
-import { registerGradients } from 'gradier';        // defines <gradier-gradient>
-import gradients from './gradients.json';           // the file the overlay saves to
-registerGradients(gradients);
-```
-
-```html
-<gradier-gradient name="hero" style="display:block;min-height:60vh">…content on top…</gradier-gradient>
-```
-
-React: `import { Gradient, registerGradients } from 'gradier/react'`, then `<Gradient name="hero" style={{ minHeight: '60vh' }} />`. It renders a CSS fallback on the server, so put it in a client component in Next.js (`'use client'`). TypeScript needs `"resolveJsonModule": true` to import the JSON. If `src/gradients.json` doesn't exist yet, create it with `{}`. A gradient name that isn't in the file shows up in the overlay as a yellow "click to create" label.
-
-Gradient JSON shape: `{ "<name>": { "points": [{ "x": 0–1, "y": 0–1, "color": "#rrggbb" }, …2–12], "softness": 0–1, "warp": 0–1, "warpScale": 0–1, "grain": 0–1, "speed": 0–1 } }`. You can edit this file directly. `gradientToCSS(g)` (from `gradier`) gives a pure-CSS approximation.
+| Symptom | Fix |
+| --- | --- |
+| No Gradier pill | Overlay not loaded. Check the script tag renders (view source), the dev condition is true, and the overlay URL returns 200. Vite-based SSR frameworks don't serve `index.html`, so use Path B. |
+| Saving fails with 403 in Codespaces, Gitpod, StackBlitz, a tunnel (ngrok, Cloudflare) or a custom dev domain | The page origin isn't localhost. Allow it: `gradier({ allowedOrigins: ['https://*.app.github.dev'] })` or `gradier serve --origin 'https://*.app.github.dev'` (`*` is a wildcard). For Path B in Codespaces, also forward port 4747 and point the script at its forwarded URL. |
+| Panel says "Can't reach the save server" | The CLI isn't running, uses another port, or the page origin isn't allowed (a 403 in the network tab). Add `--origin <page origin>`. |
+| Script blocked | A dev-site CSP: allow `http://localhost:4747` in `script-src` and `connect-src` in development. |
+| "Not found in source" | See §5; use **Copy for AI agent** and §6. In a monorepo, check `root`. |
+| Saved, but the page shows the old gradient | The dev server didn't hot-reload that file type. Reload the page. |
+| Page reloads on every mesh save | A non-Vite watcher sees the JSON file. Harmless; or exclude the file from the watcher. |
+| Mesh gradient is blank or flat | No WebGL (the CSS fallback shows instead), the element has zero height (give it a height), or the name isn't registered (`registerGradients` not called, or a typo in `name`). |
+| Port 4747 in use | `gradier serve --port 4848` and update the script URL. |
 
 ## 8. HTTP API (for scripting or debugging)
 
-Base: `<origin>/__gradier`. Requests must come from a localhost origin, the server's own origin, or an `--origin`/`allowedOrigins` entry. POST bodies are JSON (`Content-Type: application/json`).
+Base: `<origin>/__gradier`. Requests must come from a localhost origin, the server's own origin, or an allowed origin. POST bodies are JSON.
 
 | Endpoint | Body | Response |
 | --- | --- | --- |
 | `GET /overlay.js` | | The overlay script |
-| `GET /api` | | `{ file, gradients }` mesh gradients |
+| `GET /api` | | `{ file, gradients }` |
 | `POST /api` | `{ save?: {name: gradient}, delete?: [name], rename?: [{from,to}] }` | `{ file, gradients }` |
-| `POST /css/find` | `{ candidates: [gradient strings], hints?: { files?: [path], selectors?: [css selector] } }` | `{ matches: [{ file, line, column, start, end, text, quality: "exact"\|"colors", selector, score }] }` |
+| `POST /css/find` | `{ candidates: [gradient strings], hints?: { files?: [path], selectors?: [selector] } }` | `{ matches: [{ file, line, column, start, end, text, quality, selector, score }] }` |
 | `POST /css/replace` | `{ edits: [{ file, start, end, text, replacement }] }` | `{ results: [{ file, start, end, text, line, column }] }` |
 
-`/css/replace` refuses a replacement that isn't a single gradient function, that contains `; { } < > " ' \` or a backtick, that adds line breaks to a one-line gradient, or whose target is outside `root` or inside an ignored directory. It also checks that `text` is still at `[start, end)` and relocates it if the file shifted.
+`/css/replace` only accepts a single gradient function as the replacement (no `; { } < > " ' \` or backticks), only inside `root`, and checks the old text is still there.
 
-## 9. Troubleshooting
+## 9. Removing Gradier
 
-| Symptom | Fix |
-| --- | --- |
-| No Gradier pill | Overlay not loaded. Check the script tag is rendered (view source), the dev condition is true, and the overlay URL returns 200. With Vite SSR frameworks the plugin can't inject into `index.html`, so use Path B. |
-| Saving fails with 403 in Codespaces, Gitpod, StackBlitz, a tunnel (ngrok, Cloudflare) or a custom dev domain | The page origin isn't localhost. Allow it: `gradier({ allowedOrigins: ['https://*.app.github.dev'] })` or `gradier serve --origin 'https://*.app.github.dev'` (`*` is a wildcard). Same-origin requests through proxies that set `X-Forwarded-Host` are allowed automatically. For Path B in Codespaces, also make port 4747 reachable (forward it) and point the script at its forwarded URL. |
-| Panel says "Can't reach the save server" | The CLI isn't running or uses a different port, or the page's origin isn't allowed. Add `--origin <page origin>` (a 403 in the network tab confirms this). |
-| Script blocked | A CSP on the dev site: allow `http://localhost:4747` in `script-src` and `connect-src` in development. |
-| "Not found in source" | See §5. Use **Copy for AI agent** and apply it with §6. In a monorepo, check `--root`. |
-| Saved, but the page still shows the old gradient | The dev server didn't hot-reload that file type. Reload the page. Gradier keeps a preview override until the new value appears. |
-| Page reloads on every mesh save | Path B or a non-Vite bundler is watching the JSON file. This is harmless, or exclude the file from the watcher. |
-| Wrong match chosen | Pick the right one in the Source dropdown, or untick "Update all identical gradients". |
-| Port 4747 in use | `gradier serve --port 4848` and update the script URL. |
-
-## 10. Removing Gradier
-
-Delete the Vite plugin entry or the overlay script tag/snippet, the `gradier` package script, and uninstall the package. Keep `src/gradients.json` and the runtime import only if mesh gradients are still in use.
+Delete the Vite plugin entry or the overlay script tag, the `gradier` package script, and uninstall the package. Keep `src/gradients.json` and the runtime import only if mesh gradients are still used.
 
 ## Rules for agents
 
-- Never load the overlay or mount the API in production builds. Every script tag and middleware must sit behind a development-only condition.
+- Never load the overlay or mount the API in production. Every script tag and middleware sits behind a development-only condition.
 - Don't modify the user's existing `dev`/`build` scripts or CI without asking. Add a separate `gradier` script.
-- Don't commit to Git or push on the user's behalf unless asked. Gradier edits are normal file changes the user reviews.
-- After setup, always run the verification steps in §4 and report what you checked.
+- Don't commit or push on the user's behalf unless asked. Gradier's edits are ordinary file changes for the user to review.
+- After setup, always run §4 and report what you checked.
+- When writing mesh gradients by hand, follow [MESH.md](MESH.md); the runtime clamps or drops invalid values silently, so a typo won't error, it just won't show.
