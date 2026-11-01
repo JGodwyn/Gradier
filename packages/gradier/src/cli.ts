@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, readFile } from 'node:fs/promises';
+import { cp, readdir, readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +15,7 @@ Usage
       <script src="http://localhost:4747${BASE_PATH}/overlay.js" defer></script>
 
   npx gradier skill [--dir .claude/skills] [--print]
-      Install the Gradier setup skill for AI coding agents (or print it).
+      Install the Gradier skill for AI coding agents (SKILL.md plus its reference files), or print it.
 
 Using Vite? Use the plugin instead:  import gradier from 'gradier/vite'
 `;
@@ -47,18 +47,19 @@ if (cmd === 'serve') {
     });
 } else if (cmd === 'skill') {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const src = [path.join(here, 'skill', 'SKILL.md'), path.join(here, '..', 'skill', 'SKILL.md')].find((p) => existsSync(p));
+  const src = [path.join(here, 'skill'), path.join(here, '..', 'skill')].find((p) => existsSync(path.join(p, 'SKILL.md')));
   if (!src) {
-    console.error('[gradier] SKILL.md not found in the package.');
+    console.error('[gradier] The skill files are missing from the package.');
     process.exit(1);
   }
+  // SKILL.md first, then its reference files.
+  const files = (await readdir(src)).filter((f) => f.endsWith('.md')).sort((a, b) => (a === 'SKILL.md' ? -1 : b === 'SKILL.md' ? 1 : a.localeCompare(b)));
   if (process.argv.includes('--print')) {
-    process.stdout.write(await readFile(src, 'utf8'));
+    for (const f of files) process.stdout.write(`${f === 'SKILL.md' ? '' : `\n\n<!-- ${f} -->\n\n`}${await readFile(path.join(src, f), 'utf8')}`);
   } else {
     const dir = path.resolve(arg('dir', '.claude/skills')!, 'gradier');
-    await mkdir(dir, { recursive: true });
-    await copyFile(src, path.join(dir, 'SKILL.md'));
-    console.log(`Installed the Gradier skill to ${path.relative(process.cwd(), path.join(dir, 'SKILL.md'))}`);
+    await cp(src, dir, { recursive: true });
+    console.log(`Installed the Gradier skill to ${path.relative(process.cwd(), dir) || '.'}/ (${files.join(', ')})`);
   }
 } else {
   console.log(HELP);

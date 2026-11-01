@@ -1,79 +1,38 @@
 # Gradier
 
-Point at **any gradient on your running site**, edit it visually, and save the change straight back into your source code. It's a development tool and never ships to production.
+Point at **any gradient on your running site**, edit it visually, and save the change straight back into your source code. The editor only runs in development and never ships to production.
 
-**Edit existing CSS gradients.** Press <kbd>Alt</kbd>+<kbd>P</kbd> (or the crosshair button) and click any gradient on the page: `linear-`, `radial-`, `conic-` or `repeating-*`, on an element or its `::before`/`::after`, in any layer of a multi-layer background. Then:
-- drag colour stops on a gradient bar, click it to add stops, and change colours, opacity and positions,
-- switch between linear, radial and conic, rotate the angle with an on-page handle, or drag the centre of a radial or conic gradient,
-- see every change live on the page,
-- hit **Save** (<kbd>⌘/Ctrl</kbd>+<kbd>S</kbd>).
+**Edit existing CSS gradients.** Press <kbd>Alt</kbd>+<kbd>P</kbd> and click any gradient on the page: `linear-`, `radial-`, `conic-` or `repeating-*`, on an element or its `::before`/`::after`, in any layer of a multi-layer background. Drag its colour stops, change colours, angle and type, and watch the page update live. Hit **Save** (<kbd>⌘/Ctrl</kbd>+<kbd>S</kbd>) and Gradier finds where that gradient is written in your project, whether a CSS/SCSS/Less file, a CSS Module, a `<style>` block, an HTML `style=""`, a JSX `style={{…}}` or a template, and rewrites **just that gradient** in place. If it can't be traced to one string in source (Tailwind classes, values built at runtime), **Copy for AI agent** hands the change to your coding agent.
 
-Gradier finds where that gradient is written in your project, whether a CSS/SCSS/Less file, a CSS Module, a `<style>` block, an HTML `style=""`, a JSX `style={{…}}` or a template, and rewrites **just that gradient** in place. Your dev server's hot reload does the rest. If several places match, you choose which one to update, or update them all.
+**Design mesh gradients.** Drop `<gradier-gradient name="hero">` anywhere and press <kbd>Alt</kbd>+<kbd>G</kbd>. Shape it with colour nodes, lines, arcs and freehand strokes; tune softness, blend mode, grain and filters per node or for the whole gradient; export it as PNG or JPG; and save it to `src/gradients.json`. The mesh runtime is the one part that ships: about 11 kB gzipped, WebGL with a CSS fallback.
 
-If a gradient can't be traced to one string in source (Tailwind classes, values built at runtime), **Copy for AI agent** copies an edit request with the element, the old and new gradient, and any source hints. Your coding agent can apply it; see [the agent skill](#ai-agent-skill).
+## Quick start
 
-**Mesh gradients.** Drop `<gradier-gradient name="hero">` anywhere for a WebGL mesh gradient. Press <kbd>Alt</kbd>+<kbd>G</kbd> to drag colour points and tweak softness, warp, grain and motion, then save to `src/gradients.json`. This is the one part you ship: a small runtime with a CSS fallback.
+1. Install it in your project:
 
-```
-packages/gradier       the npm package
-skills/gradier         SKILL.md for AI coding agents (also shipped in the package)
-examples/vite-vanilla  plain HTML + Vite: mesh and CSS gradients
-examples/vite-react    React + Vite
-```
+   ```bash
+   npm i gradier
+   ```
 
-## Run it locally
+   Only editing existing CSS gradients? Use `npm i -D gradier`: then nothing from Gradier ships. If you use mesh gradients, keep it a normal dependency, because their runtime ships with your site.
 
-```bash
-git clone -b main https://github.com/JGodwyn/Gradier.git
-cd Gradier
-npm install
-npm run live
-```
+2. Connect it to your dev server. With Vite it's one line in `vite.config.js`:
 
-`npm run live` builds the editor and starts the example at http://localhost:5173. It also checks GitHub's `main` every 15 seconds and pulls new changes. After a pull, it rebuilds, runs `npm install` if dependencies changed, and restarts the server, so you only need to refresh the browser. It only ever fast-forwards: if your own edits are in the way, it tells you and doesn't touch them.
+   ```js
+   import gradier from 'gradier/vite';
 
-Variants:
-- `npm run live:react` runs the React example instead.
-- `npm run sync` pulls without running anything.
-- `--interval 30` changes how often it checks.
+   export default {
+     plugins: [gradier({ file: 'src/gradients.json' })],
+   };
+   ```
 
+   Other setups (React, Next.js, Nuxt, Astro, SvelteKit, Rails, Laravel, Django, plain HTML…) are below.
 
-No local setup needed:
+3. Run your dev server as usual and look for the **Gradier** pill in the bottom-right corner. Press <kbd>Alt</kbd>+<kbd>P</kbd> to edit a CSS gradient, or <kbd>Alt</kbd>+<kbd>G</kbd> for mesh gradients.
 
-- **GitHub Codespaces** (recommended, a full Linux VM): [open in Codespaces](https://codespaces.new/JGodwyn/Gradier). It installs, builds and starts the example. When port 5173 opens in a new tab, press <kbd>Alt</kbd>+<kbd>P</kbd> and click a gradient. Saves land in the codespace's files, and you can watch them change in the editor.
-- **StackBlitz** (runs in your browser tab): [open in StackBlitz](https://stackblitz.com/github/JGodwyn/Gradier).
+Using an AI coding agent? Run `npx gradier skill` and ask it to set Gradier up for you; see [AI agent skill](#ai-agent-skill).
 
-The examples already allow these preview domains. For your own project in a cloud environment, allow its domain too: `gradier({ allowedOrigins: ['https://*.app.github.dev'] })` or `gradier serve --origin 'https://*.app.github.dev'`.
-
-## Add it to your project
-
-Gradier works in any web project: it edits the gradients on your running dev site and writes them back into your source files.
-
-**1. Install it.**
-
-```bash
-npm i gradier
-```
-
-Until it's published to npm, install it from your local clone of this repo instead. Build a package file once:
-
-```bash
-cd ~/Gradier && npm run pack        # writes gradier-0.1.0.tgz in the repo root
-```
-
-then install that file in your project:
-
-```bash
-npm i ~/Gradier/gradier-0.1.0.tgz
-```
-
-Run both again to pick up newer Gradier changes.
-
-Only editing existing CSS gradients? Use `npm i -D` instead: everything Gradier does then happens in development, and nothing ships. Using mesh gradients (`<gradier-gradient>`)? Keep it a normal dependency, because their small runtime (about 11 kB gzipped) ships with your site.
-
-**2. Wire it into your dev server.** Pick your setup below. With Vite, that's one line in `vite.config.js`.
-
-**3. Run your dev server as usual** and press <kbd>Alt</kbd>+<kbd>G</kbd> (mesh gradients) or <kbd>Alt</kbd>+<kbd>P</kbd> (pick any CSS gradient on the page). Saving writes to your project's files, and the editor never ends up in your production build.
+## Set up
 
 ### Vite single-page apps (React, Vue, Svelte, Solid, vanilla…)
 
@@ -143,7 +102,7 @@ import Script from 'next/script';
 )}
 ```
 
-The [skill](skills/gradier/SKILL.md) has snippets for Nuxt, Astro, SvelteKit, Remix, Angular, Laravel, Rails and Django.
+The [skill](https://github.com/JGodwyn/Gradier/blob/main/skills/gradier/SKILL.md) has snippets for Nuxt, Astro, SvelteKit, Remix, Angular, Laravel, Rails and Django.
 
 Express / webpack-dev-server users can mount the middleware directly:
 
@@ -152,71 +111,88 @@ import { createGradierMiddleware } from 'gradier/server';
 app.use(createGradierMiddleware({ file: 'src/gradients.json' }));
 ```
 
-## AI agent skill
+## Using the editor
 
-[`skills/gradier/SKILL.md`](skills/gradier/SKILL.md) teaches a coding agent (Claude Code or any agent that reads skills) to:
-- detect the framework, install Gradier and wire it up with dev-only guards,
-- verify the setup,
-- apply the **Copy for AI agent** edit requests, including Tailwind conversions,
-- troubleshoot.
+When your dev server is running, the editor appears as a **Gradier** pill in the bottom-right corner of your site.
 
-Install it into a project with:
+### Opening it
 
-```bash
-npx gradier skill            # writes .claude/skills/gradier/SKILL.md
-npx gradier skill --print    # or print it to paste elsewhere
-```
+- **Alt+G** (or click the pill): open or close the editor for mesh gradients.
+- **Alt+P** (or the crosshair button in the panel): pick any CSS gradient on the page, then click it. **Esc** cancels.
 
-## Editor: CSS gradients
+### CSS gradients
 
-| Action | How |
+After picking a gradient, the panel shows its stops and settings, and the page updates live.
+
+| Task | How |
 | --- | --- |
-| Pick a gradient | <kbd>Alt</kbd>+<kbd>P</kbd> or the crosshair button, then click it on the page (<kbd>Esc</kbd> cancels) |
 | Add a stop | Click the gradient bar, or **+ Add** |
 | Move a stop | Drag its marker, or type a position |
-| Change a colour | Use the swatch, type any CSS colour, or use the **Opacity** slider |
-| Remove a stop | Select it and press <kbd>Delete</kbd>, or use the bin icon |
-| Angle / centre | Drag the handles on the page (<kbd>Shift</kbd> snaps), or use the sliders |
-| Save to source | **Save** or <kbd>⌘/Ctrl</kbd>+<kbd>S</kbd>. The Source row shows the file and line |
-| Can't save automatically | **Copy CSS** or **Copy for AI agent** |
+| Change a colour | The swatch, type any CSS colour, or the **Opacity** slider |
+| Remove a stop | Select it and press **Delete**, or the bin icon |
+| Type | Linear, radial or conic |
+| Angle / centre | Drag the handles on the page (**Shift** snaps), or the sliders |
+| Save to source | **Save** or **⌘/Ctrl+S**. The **Source** row shows the file and line it writes to; if several places match, choose one or update all |
+| Can't save automatically | **Copy CSS**, or **Copy for AI agent** (an edit request for a coding agent) |
 
-## Editor: mesh gradients
+### Mesh gradients
 
-| Action | How |
+#### The page
+
+Each `<gradier-gradient>` gets a label; click it to edit that gradient (a yellow `name · click to create` label creates a missing one). The selected gradient shows its colour points as handles.
+
+- **Click a node** to select it. **Click empty space** or press **Esc** to deselect.
+- **Drag a node** to move it (**Shift** snaps to a grid).
+- A selected plain node shows a **dashed circle** (its area) with a **curved grip**: drag the grip to grow or shrink how far the colour reaches. It also shows **four arms**: drag any arm to stretch the colour that way.
+- **Delete** removes the selected node.
+
+#### The toolbar (bottom of the screen)
+
+| Tool | Key | What it does |
+| --- | --- | --- |
+| Select | V | Select and drag nodes (Esc also returns here) |
+| Line | L | Drag across the gradient to draw a line; the colour spreads along it. Drag its ends to reshape |
+| Arc | A | Drag to draw an arc; drag its colour point to bend it |
+| Node | N | Click to add a node; it takes the colour under the cursor |
+| Pencil | P | Draw a freehand stroke; the colour follows it. Drag the middle handle to move it, an end to bend it, and an end's grip to make the colour wider or narrower there |
+| Shuffle | X | Shuffle the nodes' colours |
+| Scatter | R | Move the nodes to random positions |
+| Eye | H | Hide or show the handles, to see the clean gradient |
+
+Double-clicking the gradient also adds a node.
+
+#### The panel
+
+| Section | Controls |
 | --- | --- |
-| Open / close | Click the **Gradier** pill, or <kbd>Alt</kbd>+<kbd>G</kbd> |
-| Pick a gradient | Click its label on the page, or use the dropdown |
-| Create a missing gradient | Click a yellow `name · click to create` label |
-| Move a point | Drag the handle (hold <kbd>Shift</kbd> to snap) |
-| Add a point | Double-click the gradient, use the **Node** tool (<kbd>N</kbd>) and click, or **+ Add**. New points take the colour under the cursor |
-| Expand a point's area | Select the point, then drag the curved grip on its dashed circle |
-| Stretch a point's colour | Select a point and drag its four arms; a longer arm pushes the colour further that way |
-| Draw a line / arc | **Line** (<kbd>L</kbd>) or **Arc** (<kbd>A</kbd>) tool, then drag across the gradient. Drag the ends to reshape; drag an arc's colour point to bend it |
-| Freehand | **Pencil** (<kbd>P</kbd>): the colour follows your stroke. Drag the middle handle to move it, drag an end to bend it, and drag an end's grip to make the colour wider or narrower there |
-| Shuffle / scatter | <kbd>X</kbd> shuffles colours, <kbd>R</kbd> scatters points |
-| Hide handles | <kbd>H</kbd> or the eye button |
-| Select / deselect | Click a node to select it; click empty space (or <kbd>Esc</kbd>) to deselect. The points list shows just the selected node; open its dropdown to see them all |
-| Per-node or all nodes | With a node selected, **Softness**, **Blend mode** and the **Filter** sliders change only that node (a node's blend mode shows around it and fades into its neighbours) (the chip says *Node N*). With nothing selected they change every node (*All nodes*) |
-| Blend mode | Drag the **Blend mode** field (or use the arrow keys) to step through Normal, Linear, OKLab, Screen, Multiply, Overlay and Soft light |
-| Grain | **Mono**, **Duo** (warm/cool) or **Multi** (per-channel) grain, with opacity, grain size and density |
-| Filters | Hue, saturation, brightness and temperature, with a reset button |
-| Export | Pick 1×–4× of the element's size, then **JPG**, **PNG** or **Copy** (PNG to the clipboard) |
-| Back to Select | <kbd>V</kbd> or <kbd>Esc</kbd> |
-| Remove a point | Select it and press <kbd>Delete</kbd>, or use the bin icon |
-| Undo / redo | <kbd>⌘/Ctrl</kbd>+<kbd>Z</kbd> / <kbd>⌘/Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> |
-| Save | **Save** or <kbd>⌘/Ctrl</kbd>+<kbd>S</kbd> |
-| Export | Copy the tag, a pure-CSS approximation, or the JSON |
+| Gradient | Pick which gradient to edit; rename, delete, or create one |
+| Points | By default shows only the selected node; open the dropdown to see all. Change colours by swatch or hex; remove nodes |
+| Blend | **Softness** (higher is softer), **Blend mode** (drag through Normal, Linear, OKLab, Screen, Multiply, Overlay, Soft light), **Warp**, **Warp size**, **Motion** |
+| Grain | **Mono**, **Duo** or **Multi**; **Opacity**, **Grain size**, **Density** |
+| Filter | **Hue**, **Saturation**, **Brightness**, **Temperature**, and a reset button |
+| Presets | Ready-made gradients; **Randomize**, **Shuffle colors** |
+| Export | Size 1×–4× of the element, then **JPG**, **PNG**, or **Copy** (a PNG on the clipboard) |
+| Use in code | Copy the HTML tag, a CSS approximation, or the JSON |
 
-Saving writes only the gradients file. Vite's HMR is told to skip that file, so the page does not reload while you edit. A dot on the launcher marks unsaved changes, and the browser warns you before you leave with unsaved edits.
+**Selected node vs all nodes:** with a node selected, Softness, Blend mode and the Filter sliders change only that node (the section shows a "Node N" chip). With nothing selected they change every node ("All nodes").
+
+Sections collapse with their chevron. The header has undo/redo, the CSS-gradient picker, a button to move the panel to the other side, and close.
+
+#### Saving
+
+**Save** or **⌘/Ctrl+S** writes the gradients file (default `src/gradients.json`). **⌘/Ctrl+Z** / **⌘/Ctrl+Shift+Z** undo and redo. A dot on the pill marks unsaved changes, and the browser warns before leaving with unsaved edits.
 
 ## Gradient format
+
+Mesh gradients are stored by name in one JSON file (default `src/gradients.json`). The editor writes it when you save, and you can edit it by hand:
 
 ```json
 {
   "hero": {
     "points": [
       { "x": 0.1, "y": 0.2, "color": "#ffb4a2" },
-      { "x": 0.8, "y": 0.1, "color": "#8b5cf6" }
+      { "x": 0.8, "y": 0.1, "color": "#8b5cf6" },
+      { "x": 0.5, "y": 0.9, "color": "#22d3ee" }
     ],
     "softness": 0.5,
     "warp": 0.3,
@@ -227,16 +203,9 @@ Saving writes only the gradients file. Vite's HMR is told to skip that file, so 
 }
 ```
 
-`x`/`y` are relative to the element (0–1). Points can also carry optional fields, which the editor writes for you:
+`x`/`y` are relative to the element (0–1). Higher `softness` gives softer, wider blends; `speed > 0` animates the gradient (paused off-screen and for reduced-motion users). Colours blend in OKLab by default, which keeps transitions vivid instead of muddy.
 
-- `softness`, `blendMode`, `hue`, `saturation`, `brightness`, `temperature`: per-point overrides (softness and blend mode replace the gradient's; filters stack on top of it).
-- `radius`: how far the colour reaches, as a multiple of the default (`1`).
-- `arms`: four `[dx, dy]` direction handles (in units of √(width × height)) that stretch the colour's reach.
-- `shape`: `{ "type": "line" | "arc", "a": {x, y}, "b": {x, y} }` makes the colour follow a segment from `a` to `b`, or an arc from `a` through the point to `b`. `{ "type": "path", "points": [{x, y}, …] }` follows a freehand stroke. Optional `ra` / `rb` set the colour's width at the start / end.
-
-Gradients can also carry optional look settings, left out when unchanged: `blendMode` (`"normal"`, `"linear"`, `"oklab"` (default), `"screen"`, `"multiply"`, `"overlay"`, `"softlight"`), `grainType` (`"mono"`, `"duo"`, `"multi"`), `grainSize` (1–4), `grainDensity` (0–2), `hue` (−180–180), `saturation` (0–2), `brightness` (0–2) and `temperature` (−1–1).
-
- Colours blend in OKLab, which keeps transitions vivid instead of muddy. Everything except the points is a 0–1 value; higher `softness` gives softer, wider blends. `speed > 0` animates the gradient, and animation pauses when the gradient is off-screen or the user prefers reduced motion.
+The editor also writes optional fields, left out when unchanged: per-point `radius`, `arms`, `shape` (line, arc or freehand stroke), and per-point or whole-gradient `softness`, `blendMode`, `hue`, `saturation`, `brightness` and `temperature`, plus `grainType`, `grainSize` and `grainDensity`. Every field, with ranges and examples, is in [`skills/gradier/MESH.md`](https://github.com/JGodwyn/Gradier/blob/main/skills/gradier/MESH.md).
 
 ## Runtime API
 
@@ -254,6 +223,23 @@ import {
 document.querySelector('gradier-gradient').gradient = { points: [...] };
 ```
 
+## AI agent skill
+
+Gradier ships a skill that teaches coding agents (Claude Code, or any agent that reads skills) to use it. Install it in your project:
+
+```bash
+npx gradier skill            # writes .claude/skills/gradier/
+npx gradier skill --print    # or print it to paste elsewhere
+```
+
+With it, an agent can:
+- detect your framework, install Gradier and wire it up behind development-only guards, then verify the setup,
+- apply the edit requests from **Copy for AI agent**, including Tailwind and design-token cases,
+- write or adjust mesh gradients directly in `gradients.json`,
+- explain any editor control, and troubleshoot.
+
+The skill lives in [`skills/gradier/`](https://github.com/JGodwyn/Gradier/blob/main/skills/gradier/): [`SKILL.md`](https://github.com/JGodwyn/Gradier/blob/main/skills/gradier/SKILL.md) (setup, saving, edit requests, troubleshooting), [`MESH.md`](https://github.com/JGodwyn/Gradier/blob/main/skills/gradier/MESH.md) (the gradient format and runtime) and [`EDITOR.md`](https://github.com/JGodwyn/Gradier/blob/main/skills/gradier/EDITOR.md) (every control).
+
 ## Security
 
 The save API only accepts requests from localhost origins and the dev server's own origin. Pass `--origin https://my.local.dev` to allow another dev origin. The CLI binds to `127.0.0.1`.
@@ -264,9 +250,51 @@ It writes only two kinds of thing:
 
 A CSS rewrite must replace text that is still a gradient with a single gradient function containing no quotes, braces, semicolons or angle brackets. It can't inject anything into your code.
 
-## Publish to npm
+## Working on Gradier itself
 
-The package is ready to publish as `gradier` (the name is free on npm as of this writing). From the repo root:
+```
+packages/gradier       the npm package
+skills/gradier         the agent skill (shipped in the package)
+examples/vite-vanilla  plain HTML + Vite: mesh and CSS gradients
+examples/vite-react    React + Vite
+```
+
+### Live preview while developing
+
+```bash
+git clone -b main https://github.com/JGodwyn/Gradier.git
+cd Gradier
+npm install
+npm run live
+```
+
+`npm run live` builds the editor and starts the example at http://localhost:5173. It also checks GitHub's `main` every 15 seconds and pulls new changes. After a pull, it rebuilds, runs `npm install` if dependencies changed, and restarts the server, so you only need to refresh the browser. It only ever fast-forwards: if your own edits are in the way, it tells you and doesn't touch them.
+
+Variants:
+- `npm run live:react` runs the React example instead.
+- `npm run sync` pulls without running anything.
+- `--interval 30` changes how often it checks.
+
+No local setup needed:
+
+- **GitHub Codespaces** (recommended, a full Linux VM): [open in Codespaces](https://codespaces.new/JGodwyn/Gradier). It installs, builds and starts the example. When port 5173 opens in a new tab, press <kbd>Alt</kbd>+<kbd>P</kbd> and click a gradient. Saves land in the codespace's files, and you can watch them change in the editor.
+- **StackBlitz** (runs in your browser tab): [open in StackBlitz](https://stackblitz.com/github/JGodwyn/Gradier).
+
+The examples already allow these preview domains. For your own project in a cloud environment, allow its domain too: `gradier({ allowedOrigins: ['https://*.app.github.dev'] })` or `gradier serve --origin 'https://*.app.github.dev'`.
+
+### Develop
+
+```bash
+npm install
+npm run example         # builds the package, starts examples/vite-vanilla
+npm run example:react
+npm run dev             # rebuild the package on change
+npm test -w gradier     # tests
+```
+
+### Publish to npm
+
+From an up-to-date `main`:
 
 ```bash
 npm login
@@ -277,13 +305,3 @@ npm publish -w gradier
 ```
 
 Publishing builds the package, copies this README into it, and runs the type check and tests first; it stops if any of them fail. For later releases, bump the version first (`npm version patch -w gradier`), then publish again.
-
-## Develop
-
-```bash
-npm install
-npm run example         # builds the package, starts examples/vite-vanilla
-npm run example:react
-npm run dev             # rebuild the package on change
-npm test -w gradier     # parser and source-rewrite tests
-```
