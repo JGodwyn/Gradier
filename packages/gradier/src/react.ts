@@ -33,7 +33,8 @@ export function Gradient({ name, gradient, style, children, ...rest }: GradientP
   );
 
   const resolved = gradient ? normalizeGradient(gradient) : name ? getGradient(name) : undefined;
-  const fallback: CSSProperties = resolved ? { background: gradientToCSS(resolved) } : {};
+  // Pre-render stand-in. Skipped for see-through gradients, where it would show behind the WebGL canvas.
+  const fallback: CSSProperties = resolved && resolved.points.every((p) => (p.opacity ?? 1) >= 1) ? { background: gradientToCSS(resolved) } : {};
 
   return createElement(TAG, { ...rest, name, ref, style: { ...fallback, ...style } }, children);
 }

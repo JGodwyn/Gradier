@@ -26,6 +26,7 @@ import {
   type GrainType,
   type PointShape,
 } from '../core/types';
+import { colorField, createColorPicker, type ColorField } from './color';
 import { createCssEditor } from './css-editor';
 import { h } from './dom';
 import { ICONS } from './icons';
@@ -153,9 +154,7 @@ function boot() {
   let panel: HTMLElement | null = null;
   let refs: {
     rows: HTMLElement[];
-    swatches: HTMLInputElement[];
-    hexes: HTMLInputElement[];
-    coords: HTMLElement[];
+    fields: ColorField[];
     sliders: Map<string, [HTMLInputElement, HTMLOutputElement]>;
     segs: Map<string, HTMLButtonElement[]>;
     blend?: [HTMLInputElement, HTMLOutputElement];
@@ -164,7 +163,7 @@ function boot() {
     status?: HTMLElement;
     undo?: HTMLButtonElement;
     redo?: HTMLButtonElement;
-  } = { rows: [], swatches: [], hexes: [], coords: [], sliders: new Map(), segs: new Map() };
+  } = { rows: [], fields: [], sliders: new Map(), segs: new Map() };
   let structure = '';
 
   // ---------- helpers ----------
@@ -191,7 +190,10 @@ function boot() {
     return b;
   };
 
+  const picker = createColorPicker(root, () => panel);
+
   const css = createCssEditor({
+    picker,
     api: BASE,
     host,
     stage,
@@ -794,8 +796,65 @@ function boot() {
     return { w: Math.max(1, Math.round(baseW * s)), h: Math.max(1, Math.round(baseH * s)) };
   };
 
+  // ---------- moving the panel ----------
+  // Dragged by its header; the spot is remembered per browser. Without one it sits docked at the top right (or left).
+  let panelPos: { x: number; y: number } | null = (() => {
+    try {
+      const v = JSON.parse(storage('gradier:panelPos') ?? 'null') as { x: number; y: number } | null;
+      return v && Number.isFinite(v.x) && Number.isFinite(v.y) ? v : null;
+    } catch {
+      return null;
+    }
+  })();
+  const setPanelPos = (pos: { x: number; y: number } | null) => {
+    panelPos = pos;
+    storage('gradier:panelPos', JSON.stringify(pos));
+  };
+
+  /** Put the panel at its dragged spot, kept on screen (at least its header and a bit more stay visible). */
+  const placePanel = (el: HTMLElement) => {
+    if (!panelPos) {
+      el.style.left = el.style.top = el.style.right = el.style.maxHeight = '';
+      return;
+    }
+    const w = el.offsetWidth || 312;
+    const x = clamp(panelPos.x, 8, Math.max(8, innerWidth - w - 8));
+    const y = clamp(panelPos.y, 8, Math.max(8, innerHeight - 160));
+    Object.assign(el.style, { left: `${Math.round(x)}px`, top: `${Math.round(y)}px`, right: 'auto', maxHeight: `${Math.round(innerHeight - y - 12)}px` });
+  };
+
+  const dragPanel = (e: PointerEvent) => {
+    const el = panel;
+    if (!el || e.button !== 0 || (e.target as HTMLElement).closest('button, input, select')) return;
+    e.preventDefault();
+    const head = e.currentTarget as HTMLElement;
+    head.setPointerCapture(e.pointerId);
+    const start = el.getBoundingClientRect();
+    const [x0, y0] = [e.clientX, e.clientY];
+    el.classList.add('moving');
+    const move = (ev: PointerEvent) => {
+      panelPos = { x: start.left + ev.clientX - x0, y: start.top + ev.clientY - y0 };
+      placePanel(el);
+    };
+    const up = () => {
+      el.classList.remove('moving');
+      head.removeEventListener('pointermove', move);
+      head.removeEventListener('pointerup', up);
+      head.removeEventListener('pointercancel', up);
+      if (panelPos) {
+        // Store where it actually ended up (after keeping it on screen).
+        const r = el.getBoundingClientRect();
+        setPanelPos({ x: r.left, y: r.top });
+      }
+    };
+    head.addEventListener('pointermove', move);
+    head.addEventListener('pointerup', up);
+    head.addEventListener('pointercancel', up);
+  };
+  window.addEventListener('resize', () => panel && placePanel(panel));
+
   const buildPanel = (g: Gradient | undefined) => {
-    refs = { rows: [], swatches: [], hexes: [], coords: [], sliders: new Map(), segs: new Map() };
+    refs = { rows: [], fields: [], sliders: new Map(), segs: new Map() };
     const names = Object.keys(getGradients());
     const onPage = new Set(namedElements().map((el) => el.getAttribute('name')));
     const sep = () => h('span', { className: 'head-sep' });
@@ -812,9 +871,6 @@ function boot() {
           })
         : h('span', { className: 'logo' }),
       h('span', { className: 'title' }, state.mode === 'css' ? 'CSS gradient' : 'Gradier'),
-      state.mode === 'mesh' ? refs.undo : null,
-      state.mode === 'mesh' ? refs.redo : null,
-      state.mode === 'mesh' ? sep() : null,
       button(`icon ghost${cancelPick ? ' on' : ''}`, ICONS.pick, 'Pick any gradient on the page (Alt+P)', pick),
       canExpand(g)
         ? button(
@@ -824,14 +880,27 @@ function boot() {
             () => setExpanded(!state.expanded, true),
           )
         : null,
-      button('icon ghost', ICONS.dock, 'Move panel to other side', () => {
-        state.dock = state.dock === 'right' ? 'left' : 'right';
+      button('icon ghost', ICONS.dock, panelPos ? 'Snap the panel to a side' : 'Move panel to other side', () => {
+        // A dragged panel snaps to the side it's nearest; a docked one swaps sides.
+        if (panelPos && panel) {
+          const r = panel.getBoundingClientRect();
+          state.dock = r.left + r.width / 2 < innerWidth / 2 ? 'left' : 'right';
+        } else state.dock = state.dock === 'right' ? 'left' : 'right';
+        setPanelPos(null);
         storage('gradier:dock', state.dock);
         render();
+        if (panel) placePanel(panel);
       }),
       sep(),
       button('icon ghost', ICONS.close, 'Close (Alt+G)', () => setOpen(false, true)),
     );
+    head.title = 'Drag to move · double-click to snap back';
+    head.addEventListener('pointerdown', dragPanel);
+    head.addEventListener('dblclick', (e) => {
+      if ((e.target as HTMLElement).closest('button') || !panelPos) return;
+      setPanelPos(null);
+      if (panel) placePanel(panel);
+    });
     const panelClass = `panel${state.dock === 'left' ? ' left' : ''}`;
 
     if (state.mode === 'css') {
@@ -845,7 +914,7 @@ function boot() {
       body.append(h('div', { className: 'hint warn' }, `Can't reach the save server (${API}). You can still edit, but saving won't work.`));
     }
 
-    const picker = h(
+    const gradientSelect = h(
       'select',
       { className: 'grow', onchange: (e: Event) => select((e.target as HTMLSelectElement).value) },
       ...names.map((n) => h('option', { value: n, selected: n === state.selected }, onPage.has(n) ? n : `${n}  (not on page)`)),
@@ -858,7 +927,7 @@ function boot() {
         h(
           'div',
           { className: 'row' },
-          names.length ? picker : h('div', { className: 'grow hint' }, 'No gradients yet'),
+          names.length ? gradientSelect : h('div', { className: 'grow hint' }, 'No gradients yet'),
           names.length ? button('icon', ICONS.edit, 'Rename', rename) : null,
           names.length ? button('icon', ICONS.trash, 'Delete', remove) : null,
           button('icon', ICONS.plus, 'New gradient', () => create()),
@@ -902,25 +971,21 @@ function boot() {
       // Points
       const list = h('div', { className: 'points' });
       g.points.forEach((p, i) => {
-        const color = h('input', {
-          type: 'color',
-          value: p.color,
-          oninput: (e: Event) => update((d) => void (d.points[i]!.color = (e.target as HTMLInputElement).value), `color-${i}`),
+        const field = colorField({
+          picker,
+          key: `mesh:${state.selected}:${i}`,
+          text: p.color,
+          hex: p.color,
+          alpha: p.opacity ?? 1,
+          onColor: (hex) => update((d) => void (d.points[i]!.color = normalizeHex(hex)), `color-${i}`),
+          onAlpha: (a) =>
+            update((d) => {
+              const pt = d.points[i]!;
+              if (a < 1) pt.opacity = a;
+              else delete pt.opacity;
+            }, `opacity-${i}`),
         });
-        const hex = h('input', {
-          className: 'text grow',
-          value: p.color,
-          spellcheck: false,
-          onchange: (e: Event) => {
-            const v = (e.target as HTMLInputElement).value;
-            if (/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v.trim())) update((d) => void (d.points[i]!.color = normalizeHex(v)));
-            else (e.target as HTMLInputElement).value = getGradient(state.selected!)!.points[i]!.color;
-          },
-        });
-        const coords = h('span', { className: 'coords' });
-        refs.swatches[i] = color;
-        refs.hexes[i] = hex;
-        refs.coords[i] = coords;
+        refs.fields[i] = field;
         const kind = p.shape ? { line: 'Line', arc: 'Arc', path: 'Stroke' }[p.shape.type] : '';
         const row = h(
           'div',
@@ -930,12 +995,11 @@ function boot() {
             onpointerdown: () => {
               if (state.point === i) return;
               state.point = i;
-              render();
+              // Rebuild after the click lands, so a click on the swatch still opens the picker.
+              window.addEventListener('pointerup', () => setTimeout(render), { once: true });
             },
           },
-          h('label', { className: 'swatch' }, color),
-          hex,
-          coords,
+          field.el,
           button('icon ghost small', ICONS.trash, 'Remove point', () => removePoint(i)),
         );
         refs.rows[i] = row;
@@ -1059,7 +1123,7 @@ function boot() {
     }
 
     refs.status = h('span', { className: 'status' });
-    const foot = h('div', { className: 'foot' }, refs.status);
+    const foot = h('div', { className: 'foot' }, refs.undo!, refs.redo!, refs.status);
 
     return h('div', { className: panelClass }, head, body, foot);
   };
@@ -1068,12 +1132,9 @@ function boot() {
   const patch = (g: Gradient | undefined) => {
     if (g) {
       g.points.forEach((p, i) => {
-        const sw = refs.swatches[i];
-        const hex = refs.hexes[i];
-        if (sw && sw.value !== p.color) sw.value = p.color;
-        if (hex && shadow.activeElement !== hex) hex.value = p.color;
+        refs.fields[i]?.set(p.color, p.color, p.opacity ?? 1);
         refs.rows[i]?.classList.toggle('active', state.point === i);
-        if (refs.coords[i]) refs.coords[i]!.textContent = `${Math.round(p.x * 100)}, ${Math.round(p.y * 100)}`;
+        if (refs.rows[i]) refs.rows[i]!.title = `${p.shape ? { line: 'Line', arc: 'Arc', path: 'Stroke' }[p.shape.type] : 'Point'} at ${Math.round(p.x * 100)}, ${Math.round(p.y * 100)}`;
       });
       for (const def of ALL_SLIDERS) {
         const pair = refs.sliders.get(def.key);
@@ -1160,6 +1221,7 @@ function boot() {
       cancelPick?.();
       cancelPick = null;
       state.expanded = false;
+      picker.close(false);
       syncExpand(undefined, animate);
       css.clearStage();
       const closing = panel;
@@ -1211,11 +1273,14 @@ function boot() {
     if (key !== structure || !panel) {
       structure = key;
       const scroll = panel?.querySelector('.body')?.scrollTop ?? 0;
+      picker.beginBind();
       const next = buildPanel(g);
+      picker.endBind();
       next.style.pointerEvents = 'auto';
       const opening = !panel;
       panel ? panel.replaceWith(next) : root.append(next);
       panel = next;
+      placePanel(next);
       if (opening && animate) morph(panel, launchRect, { duration: 280, fade: true });
       panel.querySelector('.body')!.scrollTop = scroll;
     }
@@ -1306,11 +1371,15 @@ function boot() {
   /** Fit the expanded box into the space beside the panel and above the toolbar. */
   const layoutExpand = () => {
     if (!expandBox) return;
-    const panelW = panel ? panel.offsetWidth + 12 : 0;
+    // The free side of the screen: left of the panel when it sits on the right half, right of it otherwise.
+    const pr = panel?.getBoundingClientRect();
+    const onRight = !pr || pr.left + pr.width / 2 > innerWidth / 2;
+    const regionL = pr && !onRight ? pr.right : 0;
+    const regionR = pr && onRight ? pr.left : innerWidth;
     const margin = innerWidth < 700 ? 16 : 48;
     const top = 56;
     const bottom = 96;
-    const availW = Math.max(innerWidth - panelW - margin * 2, 120);
+    const availW = Math.max(regionR - regionL - margin * 2, 120);
     const availH = Math.max(innerHeight - top - bottom, 120);
     let w = availW;
     let height = w / expandAspect;
@@ -1318,7 +1387,7 @@ function boot() {
       height = availH;
       w = height * expandAspect;
     }
-    const left = (state.dock === 'left' ? panelW : 0) + margin + (availW - w) / 2;
+    const left = regionL + margin + (availW - w) / 2;
     Object.assign(expandBox.style, {
       left: `${Math.round(left)}px`,
       top: `${Math.round(top + (availH - height) / 2)}px`,
@@ -1790,6 +1859,18 @@ function boot() {
     true,
   );
 
+  // A click outside the colour picker (and not on a colour swatch, which toggles it) closes it.
+  window.addEventListener(
+    'pointerdown',
+    (e) => {
+      if (!picker.key) return;
+      const path = e.composedPath();
+      if (path.some((n) => picker.contains(n) || (n instanceof HTMLElement && n.classList.contains('cf-swatch')))) return;
+      picker.close();
+    },
+    true,
+  );
+
   // Clicking anywhere on the page that isn't one of Gradier's own controls deselects the node.
   window.addEventListener(
     'pointerdown',
@@ -1826,6 +1907,10 @@ function boot() {
       if (!state.open || cancelPick) return;
       const target = e.composedPath()[0];
       const mod = isMac ? e.metaKey : e.ctrlKey;
+      if (e.key === 'Escape' && picker.key) {
+        e.preventDefault();
+        return picker.close(false);
+      }
       if (!mod && !e.altKey && e.key.toLowerCase() === 'f' && !isTextField(target)) {
         const g = state.selected ? getGradient(state.selected) : undefined;
         if (state.expanded || canExpand(g)) {

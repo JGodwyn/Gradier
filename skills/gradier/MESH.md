@@ -54,6 +54,7 @@ Blend modes: `"oklab"` (default; vivid, even transitions), `"normal"` (plain sRG
 | `x`, `y` | 0–1 (−0.5–1.5 allowed) | Position relative to the element: `0,0` top-left, `1,1` bottom-right. Points slightly outside pull colour in from the edge |
 | `color` | `#rgb` or `#rrggbb` | The colour |
 | `radius` | 0.2–5, default 1 | How far this colour reaches |
+| `opacity` | 0–1 | How opaque the point's colour is (default 1, omitted). Below 1 the element's background shows through there |
 | `softness` | 0–1 | Overrides the gradient's softness for this point |
 | `blendMode` | as above | This point's blend mode; it shows around the point and fades into its neighbours |
 | `hue`, `saturation`, `brightness`, `temperature` | as above | Filters for this point only, applied on top of the gradient's |

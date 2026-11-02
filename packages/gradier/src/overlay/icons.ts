@@ -3,6 +3,7 @@ import arrowsOut from '@phosphor-icons/core/regular/arrows-out.svg';
 import bookmark from '@phosphor-icons/core/regular/bookmark-simple.svg';
 import caretDown from '@phosphor-icons/core/regular/caret-down.svg';
 import caretLeft from '@phosphor-icons/core/regular/caret-left.svg';
+import circleHalf from '@phosphor-icons/core/regular/circle-half.svg';
 import cornersIn from '@phosphor-icons/core/regular/corners-in.svg';
 import cornersOut from '@phosphor-icons/core/regular/corners-out.svg';
 import crosshair from '@phosphor-icons/core/regular/crosshair-simple.svg';
@@ -41,6 +42,7 @@ export const ICONS = {
   expand: cornersOut,
   collapse: cornersIn,
   bookmark,
+  opacity: circleHalf,
 };
 
 export const TOOL_GLYPHS = {
