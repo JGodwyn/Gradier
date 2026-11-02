@@ -11,6 +11,7 @@ import {
   type ParsedStop,
 } from '../core/css-gradient';
 import { MAX_POINTS, type Gradient, type GradientPoint } from '../core/types';
+import { colorField, type ColorField, type ColorPicker } from './color';
 import { h } from './dom';
 import { ICONS } from './icons';
 import { describe, type Pseudo } from './picker';
@@ -48,6 +49,7 @@ interface Target {
 }
 
 export interface CssEditorContext {
+  picker: ColorPicker;
   api: string;
   host: Element;
   stage: HTMLElement;
@@ -96,6 +98,8 @@ function toRgba(color: string): [number, number, number, number] | null {
   return out;
 }
 
+/** What a stop's colour box shows: its hex when the browser can resolve it (opacity has its own box), else as written. */
+const stopText = (color: string, rgba: number[]) => (toRgba(color) ? hex(rgba) : color);
 const hex = ([r, g, b]: number[]) => `#${[r, g, b].map((v) => v!.toString(16).padStart(2, '0')).join('')}`;
 const formatColor = (rgba: number[]) => (rgba[3]! < 1 ? `rgb(${rgba[0]} ${rgba[1]} ${rgba[2]} / ${rgba[3]})` : hex(rgba));
 
@@ -231,7 +235,7 @@ export function createCssEditor(ctx: CssEditorContext) {
   const history = { undo: [] as string[], redo: [] as string[], key: undefined as string | undefined, at: 0 };
 
   let refs: Record<string, HTMLElement | undefined> = {};
-  let stopRefs: Array<{ row: HTMLElement; swatch: HTMLInputElement; text: HTMLInputElement; pos: HTMLInputElement }> = [];
+  let stopRefs: Array<{ row: HTMLElement; field: ColorField; pos: HTMLInputElement }> = [];
   let markers: HTMLElement[] = [];
   /** Box shown by the expanded view; when set, on-page handles are drawn on it instead of the element. */
   let expandEl: HTMLElement | null = null;
@@ -679,22 +683,25 @@ export function createCssEditor(ctx: CssEditorContext) {
         list.append(h('div', { className: 'hint' }, `Colour hint at ${s.positions.join(' ')}`));
         return;
       }
-      const swatch = h('input', {
-        type: 'color',
-        oninput: (e: Event) =>
+      const rgba = resolvedColor(i);
+      const field = colorField({
+        picker: ctx.picker,
+        key: `css:${target!.id}:${target!.layer}:${i}`,
+        free: true,
+        text: stopText(s.color, rgba),
+        hex: hex(rgba),
+        alpha: rgba[3],
+        onColor: (hx) =>
           update((d) => {
-            const [r, g, b] = toRgba((e.target as HTMLInputElement).value)!;
+            const [r, g, b] = toRgba(hx)!;
             d.stops[i]!.color = formatColor([r, g, b, resolvedColor(i)[3]]);
           }, `color-${i}`),
-      });
-      const text = h('input', {
-        className: 'text grow mono',
-        spellcheck: false,
-        onchange: (e: Event) => {
-          const v = (e.target as HTMLInputElement).value.trim();
-          if (CSS.supports('color', v) || /^var\(/.test(v)) update((d) => void (d.stops[i]!.color = v));
-          else ctx.toast('Not a valid CSS colour', true), patch();
-        },
+        onAlpha: (a) =>
+          update((d) => {
+            const [r, g, b] = resolvedColor(i);
+            d.stops[i]!.color = formatColor([r, g, b, a]);
+          }, `alpha-${i}`),
+        onText: (v) => update((d) => void (d.stops[i]!.color = v)),
       });
       const pos = h('input', {
         className: 'text pos mono',
@@ -710,20 +717,13 @@ export function createCssEditor(ctx: CssEditorContext) {
       const row = h(
         'div',
         { className: 'point', onpointerdown: () => ((selected = i), patch()) },
-        h('label', { className: 'swatch' }, swatch),
-        text,
+        field.el,
         pos,
         ctx.button('icon ghost small', ICONS.trash, 'Remove stop', () => removeStop(i)),
       );
-      stopRefs[i] = { row, swatch, text, pos };
+      stopRefs[i] = { row, field, pos };
       list.append(row);
     });
-    const alpha = slider('alpha', 'Opacity', 0, 100, 1, (d, v) => {
-      if (selected === null) return;
-      const [r, g, b] = resolvedColor(selected);
-      d.stops[selected]!.color = formatColor([r, g, b, v / 100]);
-    });
-    refs.alpha = alpha;
     body.append(
       h(
         'div',
@@ -731,7 +731,6 @@ export function createCssEditor(ctx: CssEditorContext) {
         h('div', { className: 'label' }, `Stops  ${m.stops.filter((s) => s.color).length}`, h('button', { className: 'btn small', type: 'button', onclick: () => addStop() }, '+ Add')),
         bar,
         list,
-        alpha,
       ),
     );
 
@@ -806,9 +805,7 @@ export function createCssEditor(ctx: CssEditorContext) {
       const r = stopRefs[i];
       if (r) {
         r.row.classList.toggle('active', selected === i);
-        const hx = hex(rgba);
-        if (r.swatch.value !== hx) r.swatch.value = hx;
-        if (ctx.shadow.activeElement !== r.text) r.text.value = s.color;
+        r.field.set(stopText(s.color, rgba), hex(rgba), rgba[3]);
         if (ctx.shadow.activeElement !== r.pos) r.pos.value = s.positions.join(' ');
       }
     });
@@ -816,13 +813,6 @@ export function createCssEditor(ctx: CssEditorContext) {
     setRange('angle', m.cfg.angle, `${Math.round(m.cfg.angle)}°`);
     setRange('x', m.cfg.x ?? 50, `${Math.round(m.cfg.x ?? 50)}`);
     setRange('y', m.cfg.y ?? 50, `${Math.round(m.cfg.y ?? 50)}`);
-    if (refs.alpha) {
-      refs.alpha.style.display = selected === null ? 'none' : '';
-      if (selected !== null) {
-        const a = Math.round(resolvedColor(selected)[3] * 100);
-        setRange('alpha', a, `${a}`);
-      }
-    }
     if (refs.code) refs.code.textContent = serialize(m);
     const dirty = isDirty();
     if (refs.status) {

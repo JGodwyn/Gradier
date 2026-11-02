@@ -36,6 +36,8 @@ export interface GradientPoint {
   arms?: Array<[number, number]>;
   /** Optional curve the colour follows. */
   shape?: PointShape;
+  /** How opaque this point's colour is (0–1). Below 1 the element shows through. Omitted when 1. */
+  opacity?: number;
   /** Per-point softness (0–1); overrides the gradient's softness for this point. */
   softness?: number;
   /** Per-point blend mode; overrides the gradient's around this point. */
@@ -185,6 +187,7 @@ export function normalizeGradient(input: unknown): Gradient {
     if (a) out.arms = a;
     const raw = p as Record<string, unknown>;
     if (typeof raw.softness === 'number') out.softness = round(num(raw.softness, 0.5, 0, 1));
+    if (typeof raw.opacity === 'number' && raw.opacity < 1) out.opacity = round(num(raw.opacity, 1, 0, 1));
     if (BLEND_MODES.some(([m]) => m === raw.blendMode)) out.blendMode = raw.blendMode as BlendMode;
     for (const key of POINT_FILTERS) {
       const [min, max] = LOOK_RANGES[key];

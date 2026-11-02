@@ -178,7 +178,9 @@ Double-clicking the gradient also adds a node.
 
 **Selected node vs all nodes:** with a node selected, Softness, Blend mode and the Filter sliders change only that node (the section shows a "Node N" chip). With nothing selected they change every node ("All nodes").
 
-Sections collapse with their chevron. The header has undo/redo, the CSS-gradient picker, expand, a button to move the panel to the other side, and close.
+Sections collapse with their chevron. The panel floats at the top right: drag it by its header to move it (double-click the header to snap it back); the header has the CSS-gradient picker, expand, a button to snap the panel to a side, and close. Undo/redo sit in the footer.
+
+**Colours:** each colour field is a swatch, its hex, and its opacity. Click the swatch for the picker (a saturation/brightness square, a hue bar, and the value as HEX, RGB or HSL); type a hex directly; set opacity by typing, with the arrow keys, or by dragging the ◐ icon. A mesh point below 100% lets the page show through.
 
 #### Saving
 

@@ -36,6 +36,8 @@ uniform vec4 u_armLen[${MAX_POINTS}];
 uniform sampler2D u_paths;
 // per-point falloff exponent (lower = softer)
 uniform float u_power[${MAX_POINTS}];
+// Per-point opacity.
+uniform float u_alpha[${MAX_POINTS}];
 // Per-point blend mode: x = mixing space (0 OKLab, 1 linear RGB, 2 sRGB),
 // y = contrast curve (0 none, 1 screen, 2 multiply, 3 overlay, 4 soft light)
 uniform vec2 u_mode[${MAX_POINTS}];
@@ -149,7 +151,8 @@ void main() {
   vec2 q = uv * scale;
 
   vec3 sum = vec3(0.0), sumLin = vec3(0.0), sumSrgb = vec3(0.0);
-  float total = 0.0;
+  // Colours mix by influence × opacity, so a see-through point fades out instead of tinting its neighbours.
+  float total = 0.0, totalC = 0.0;
   float ws[${MAX_POINTS}];
   for (int i = 0; i < ${MAX_POINTS}; i++) {
     if (i >= u_count) break;
@@ -175,18 +178,22 @@ void main() {
     }
     dist /= meta.y;
     float w = pow(dist * dist + 1e-5, -u_power[i] * 0.5);
-    ws[i] = w;
-    sum += u_col[i] * w;
-    sumLin += u_colLin[i] * w;
-    sumSrgb += u_colSrgb[i] * w;
+    float wc = w * u_alpha[i];
+    ws[i] = wc;
+    sum += u_col[i] * wc;
+    sumLin += u_colLin[i] * wc;
+    sumSrgb += u_colSrgb[i] * wc;
     total += w;
+    totalC += wc;
   }
+  float alpha = totalC / total;
+  totalC = max(totalC, 1e-6);
 
   // Colours arrive already filtered; mix them in the chosen space.
   // The blend in each mixing space, as display sRGB.
-  vec3 inOklab = linearToSrgb(oklabToLinear(sum / total));
-  vec3 inLinear = linearToSrgb(sumLin / total);
-  vec3 inSrgb = clamp(sumSrgb / total, 0.0, 1.0);
+  vec3 inOklab = linearToSrgb(oklabToLinear(sum / totalC));
+  vec3 inLinear = linearToSrgb(sumLin / totalC);
+  vec3 inSrgb = clamp(sumSrgb / totalC, 0.0, 1.0);
   // Each point applies its own blend mode, weighted by its influence here, so a mode set on one node shows around
   // that node and fades into its neighbours. With one mode everywhere this is exactly that mode.
   vec3 col = vec3(0.0);
@@ -198,7 +205,7 @@ void main() {
     else if (m.y > 2.5) c = mix(2.0 * c * c, 1.0 - 2.0 * (1.0 - c) * (1.0 - c), step(0.5, c));
     else if (m.y > 1.5) c = c * c;
     else if (m.y > 0.5) c = 1.0 - (1.0 - c) * (1.0 - c);
-    col += c * (ws[i] / total);
+    col += c * (ws[i] / totalC);
   }
 
   // Film grain: every value comes from its own channel of an independent hash, so there is no shared pattern.
@@ -219,7 +226,7 @@ void main() {
   col += grain * amount * coverage;
   // Tiny per-pixel dither against banding.
   col += (hash42(gl_FragCoord.xy + 0.5 + seed * 7.0).w - 0.5) * (1.5 / 255.0);
-  gl_FragColor = vec4(col, 1.0);
+  gl_FragColor = vec4(col, alpha);
 }`;
 
 const DEFAULT_ARMS: Array<[number, number]> = [
@@ -297,7 +304,7 @@ export class MeshRenderer {
 
     for (const name of [
       'u_res', 'u_time', 'u_count', 'u_pos', 'u_col', 'u_meta', 'u_ends', 'u_armAng', 'u_armLen', 'u_paths',
-      'u_power', 'u_colLin', 'u_colSrgb', 'u_mode', 'u_warp', 'u_warpScale', 'u_grain', 'u_grainOpts',
+      'u_power', 'u_alpha', 'u_colLin', 'u_colSrgb', 'u_mode', 'u_warp', 'u_warpScale', 'u_grain', 'u_grainOpts',
     ]) {
       this.uniforms[name] = gl.getUniformLocation(p, name);
     }
@@ -341,6 +348,7 @@ export class MeshRenderer {
     const colSrgb = new Float32Array(MAX_POINTS * 3);
     const mode = new Float32Array(MAX_POINTS * 2);
     const power = new Float32Array(MAX_POINTS).fill(3.75);
+    const alpha = new Float32Array(MAX_POINTS).fill(1);
     g.points.slice(0, count).forEach((pt, i) => {
       const dx = drift * Math.sin(t * 0.6 + i * 1.7);
       const dy = drift * Math.cos(t * 0.5 + i * 2.3);
@@ -354,6 +362,7 @@ export class MeshRenderer {
       mode.set(BLEND[pt.blendMode ?? look(g, 'blendMode')], i * 2);
       // Higher softness = lower exponent = wider, gentler falloff.
       power[i] = 6 - (pt.softness ?? g.softness) * 4.5;
+      alpha[i] = pt.opacity ?? 1;
       meta[i * 3 + 1] = pt.radius ?? 1;
       const sh = pt.shape;
       if (sh) {
@@ -405,6 +414,7 @@ export class MeshRenderer {
     gl.uniform4fv(u.u_armAng!, armAng);
     gl.uniform4fv(u.u_armLen!, armLen);
     gl.uniform1fv(u.u_power!, power);
+    gl.uniform1fv(u.u_alpha!, alpha);
     gl.uniform3fv(u.u_colLin!, colLin);
     gl.uniform3fv(u.u_colSrgb!, colSrgb);
     gl.uniform2fv(u.u_mode!, mode);

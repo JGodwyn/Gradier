@@ -165,7 +165,8 @@ export function defineGradientElement(): void {
     refresh() {
       if (!this.canvas) return;
       const g = this.resolved;
-      this.canvas.style.background = g ? gradientToCSS(g) : 'transparent';
+      // The CSS approximation only stands in until WebGL draws (it would show through see-through points).
+      this.canvas.style.background = g && !this.renderer ? gradientToCSS(g) : 'transparent';
       this.toggleAttribute('data-missing', !g);
       if (g && this.renderer) {
         this.renderer.setGradient(g);
