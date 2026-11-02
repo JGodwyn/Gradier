@@ -40,3 +40,9 @@ export function Gradient({ name, gradient, style, children, ...rest }: GradientP
 
 export { registerGradients, getGradient } from './core/store';
 export type { GradientData };
+
+// Lets the dev overlay know the runtime is on the page (so converted elements also render outside the editor).
+if (typeof window !== 'undefined') {
+  (globalThis as unknown as Record<string, boolean>).__GRADIER_RUNTIME__ = true;
+  defineGradientElement();
+}

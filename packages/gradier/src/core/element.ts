@@ -20,9 +20,60 @@ const STYLE = `
 canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; z-index: -1; pointer-events: none; }
 `;
 
+/** Attribute that puts a mesh gradient behind any element: `<div data-gradier="hero">`. */
+export const LAYER_ATTR = 'data-gradier';
+/** Marks the `<gradier-gradient>` the runtime inserts as that element's background layer. */
+export const LAYER_MARK = 'data-gradier-layer';
+
+/**
+ * Keep a `<gradier-gradient>` background layer inside every element with `data-gradier="name"`. The layer sits
+ * behind the element's content (the element becomes its own stacking context) and follows its rounded corners.
+ * Lets any existing element become a mesh gradient without changing its tag. Safe to call more than once.
+ */
+export function attachGradientLayers(): void {
+  if (typeof document === 'undefined') return;
+  const g = globalThis as unknown as Record<string, boolean | undefined>;
+  if (g.__GRADIER_LAYERS__) return;
+  g.__GRADIER_LAYERS__ = true;
+
+  const sync = (host: HTMLElement) => {
+    const name = host.getAttribute(LAYER_ATTR);
+    let layer = Array.from(host.children).find((c) => c.hasAttribute(LAYER_MARK)) as HTMLElement | undefined;
+    if (!name) return void layer?.remove();
+    if (!layer) {
+      layer = document.createElement(TAG);
+      layer.setAttribute(LAYER_MARK, '');
+      layer.setAttribute('aria-hidden', 'true');
+      layer.style.cssText = 'position:absolute;inset:0;z-index:-1;border-radius:inherit;pointer-events:none;';
+      host.prepend(layer);
+    }
+    if (layer.getAttribute('name') !== name) layer.setAttribute('name', name);
+    if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+    if (host.style.isolation !== 'isolate') host.style.isolation = 'isolate';
+  };
+  const scan = () => {
+    frame = 0;
+    document.querySelectorAll<HTMLElement>(`[${LAYER_ATTR}]`).forEach(sync);
+    // Layers whose element lost the attribute.
+    document.querySelectorAll<HTMLElement>(`[${LAYER_MARK}]`).forEach((l) => {
+      if (!l.parentElement?.hasAttribute(LAYER_ATTR)) l.remove();
+    });
+  };
+  let frame = 0;
+  const schedule = () => {
+    if (!frame) frame = requestAnimationFrame(scan);
+  };
+  // Frameworks may re-render the element's children and drop the layer; put it back.
+  new MutationObserver(schedule).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: [LAYER_ATTR] });
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', scan, { once: true });
+  else scan();
+}
+
 /** Define the `<gradier-gradient>` custom element. Safe to call multiple times and during SSR (no-op). */
 export function defineGradientElement(): void {
-  if (typeof window === 'undefined' || !('customElements' in window) || customElements.get(TAG)) return;
+  if (typeof window === 'undefined' || !('customElements' in window)) return;
+  attachGradientLayers();
+  if (customElements.get(TAG)) return;
 
   const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 

@@ -60,6 +60,9 @@ export class SourceError extends Error {
   }
 }
 
+/** Every source file under root that may contain gradients or markup. */
+export const walkSource = (root: string) => walk(root);
+
 async function walk(root: string, out: string[] = [], dir = root): Promise<string[]> {
   if (out.length >= MAX_FILES) return out;
   let entries;

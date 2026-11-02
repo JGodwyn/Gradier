@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isValidName, normalizeGradient, type GradientMap } from '../core/types';
+import { addLayerAttribute, type MarkupTarget } from './markup';
 import { findInSource, replaceInSource, SourceError, type FindRequest, type ReplaceEdit } from './source';
 
 export { findInSource, replaceInSource, type FindRequest, type ReplaceEdit, type SourceMatch } from './source';
@@ -215,7 +216,7 @@ export function createGradierMiddleware(options: GradierServerOptions = {}): Mid
       if (route === '/library' && (req.method === 'GET' || req.method === 'HEAD')) {
         return send(res, 200, { items: await readLibrary(libraryFile) });
       }
-      if (req.method === 'POST' && (route === '/api' || route === '/library' || route.startsWith('/css/'))) {
+      if (req.method === 'POST' && (route === '/api' || route === '/library' || route === '/markup/layer' || route.startsWith('/css/'))) {
         if (!String(req.headers['content-type']).includes('application/json')) {
           throw new HttpError(415, 'Expected application/json');
         }
@@ -239,6 +240,10 @@ export function createGradierMiddleware(options: GradierServerOptions = {}): Mid
           const items = cleanLibrary((body as { items?: unknown }).items);
           await serial(() => writeJson(libraryFile, { items }));
           return send(res, 200, { items });
+        }
+        if (route === '/markup/layer') {
+          const { element, name } = body as { element: MarkupTarget; name: string };
+          return send(res, 200, await serial(() => addLayerAttribute(root, element ?? ({} as MarkupTarget), name)));
         }
         if (route === '/css/find') {
           return send(res, 200, { matches: await findInSource(root, body as FindRequest) });

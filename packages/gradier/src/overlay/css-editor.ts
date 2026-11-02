@@ -10,6 +10,7 @@ import {
   type ParsedGradient,
   type ParsedStop,
 } from '../core/css-gradient';
+import { MAX_POINTS, type Gradient, type GradientPoint } from '../core/types';
 import { h } from './dom';
 import { ICONS } from './icons';
 import { describe, type Pseudo } from './picker';
@@ -57,6 +58,12 @@ export interface CssEditorContext {
   render(): void;
   pick(): void;
   back(): void;
+  /** Turn the picked element into a mesh gradient, seeded from this CSS gradient or from `from`. */
+  convert(from?: Gradient): void;
+  /** Your saved gradients, offered as starting points for a conversion. */
+  library(): Array<{ id: string; gradient: Gradient }>;
+  /** CSS approximation of a mesh gradient, for swatches. */
+  swatch(g: Gradient): string;
 }
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
@@ -498,7 +505,7 @@ export function createCssEditor(ctx: CssEditorContext) {
     body.append(
       h(
         'div',
-        { className: 'section' },
+        { className: 'section flat' },
         h('div', { className: 'label' }, 'Element'),
         h('div', { className: 'row' }, h('div', { className: 'grow mono ellipsis', title: cssPath(t.el) + t.pseudo }, describe(t.el, t.pseudo)), ctx.button('icon', ICONS.pick, 'Pick another gradient (Alt+P)', ctx.pick)),
         layerSelect,
@@ -506,7 +513,7 @@ export function createCssEditor(ctx: CssEditorContext) {
     );
 
     // Source
-    const sourceSection = h('div', { className: 'section' }, h('div', { className: 'label' }, 'Source'));
+    const sourceSection = h('div', { className: 'section flat' }, h('div', { className: 'label' }, 'Source'));
     if (searching) sourceSection.append(h('div', { className: 'hint' }, 'Searching your project…'));
     else if (!source) {
       const tw = /\b(bg-gradient-to-|bg-linear-|bg-radial|bg-conic|from-|via-|to-)/.test(t.el.getAttribute('class') ?? '');
@@ -584,7 +591,7 @@ export function createCssEditor(ctx: CssEditorContext) {
     }
     const typeSection = h(
       'div',
-      { className: 'section' },
+      { className: 'section flat' },
       h('div', { className: 'label' }, 'Type'),
       seg,
       h(
@@ -712,11 +719,31 @@ export function createCssEditor(ctx: CssEditorContext) {
     body.append(
       h(
         'div',
-        { className: 'section' },
+        { className: 'section flat' },
         h('div', { className: 'label' }, `Stops  ${m.stops.filter((s) => s.color).length}`, h('button', { className: 'btn small', type: 'button', onclick: () => addStop() }, '+ Add')),
         bar,
         list,
         alpha,
+      ),
+    );
+
+    // Make it a mesh gradient
+    const lib = ctx.library();
+    const saved = h('div', { className: 'presets' });
+    for (const item of lib) {
+      const b = h('button', { className: 'preset', type: 'button', title: 'Make it a mesh gradient from this saved gradient', onclick: () => ctx.convert(item.gradient) });
+      b.style.background = ctx.swatch(item.gradient);
+      saved.append(b);
+    }
+    body.append(
+      h(
+        'div',
+        { className: 'section flat' },
+        h('div', { className: 'label' }, 'Mesh gradient'),
+        h('div', { className: 'hint' }, 'Turn this element into a mesh gradient to add points, curves, grain and filters.'),
+        btn('Make it a mesh gradient', () => ctx.convert(), 'action'),
+        lib.length ? h('div', { className: 'hint' }, 'Or start from one of your saved gradients:') : null,
+        lib.length ? saved : null,
       ),
     );
 
@@ -725,7 +752,7 @@ export function createCssEditor(ctx: CssEditorContext) {
     body.append(
       h(
         'div',
-        { className: 'section' },
+        { className: 'section flat' },
         h('div', { className: 'label' }, 'CSS'),
         refs.code,
         h(
@@ -957,6 +984,69 @@ export function createCssEditor(ctx: CssEditorContext) {
     for (const el of Object.values(stageEls)) el.remove();
   };
 
+  // ---------- conversion to a mesh gradient ----------
+  /** The opaque colour behind the element, so semi-transparent stops can be flattened for the mesh. */
+  const backdrop = (el: Element): [number, number, number] => {
+    for (let e: Element | null = el; e; e = e.parentElement) {
+      const c = toRgba(getComputedStyle(e).backgroundColor);
+      if (c && c[3] >= 0.99) return [c[0], c[1], c[2]];
+    }
+    return [255, 255, 255];
+  };
+
+  /** Mesh points that approximate the current CSS gradient (colours placed along its line, rings or sweep). */
+  const meshSeed = (): GradientPoint[] | null => {
+    if (!model || !target) return null;
+    const m = model;
+    const r = target.el.getBoundingClientRect();
+    const w = r.width || 1;
+    const ht = r.height || 1;
+    const bg = backdrop(target.el);
+    const colored = m.stops.map((s, i) => ({ s, i })).filter((x) => x.s.color);
+    const pct = stopPercents(colored.map((x) => x.s));
+    let stops = colored.map((x, k) => {
+      const [cr, cg, cb, a] = resolvedColor(x.i);
+      return { t: clamp(pct[k]! / 100, 0, 1), color: hex([cr, cg, cb].map((v, j) => Math.round(v * a + bg[j]! * (1 - a)))) };
+    });
+    if (m.fn === 'conic' && stops.length > 2 && stops.at(-1)!.t > 0.99) stops = stops.slice(0, -1);
+    const perStop = m.fn === 'linear' ? 2 : m.fn === 'radial' ? 3 : 1;
+    const most = Math.max(2, Math.floor(MAX_POINTS / perStop));
+    if (stops.length > most) stops = Array.from({ length: most }, (_, k) => stops[Math.round((k * (stops.length - 1)) / (most - 1))]!);
+    const pts: GradientPoint[] = [];
+    const push = (px: number, py: number, color: string) =>
+      pts.push({ x: Math.round(clamp(px / w, 0, 1) * 1000) / 1000, y: Math.round(clamp(py / ht, 0, 1) * 1000) / 1000, color });
+    const cx = ((m.cfg.x ?? 50) / 100) * w;
+    const cy = ((m.cfg.y ?? 50) / 100) * ht;
+    if (m.fn === 'linear') {
+      const { angle } = geometry();
+      const a = (angle * Math.PI) / 180;
+      const [dx, dy] = [Math.sin(a), -Math.cos(a)];
+      const len = Math.abs(w * dx) + Math.abs(ht * dy);
+      const across = (Math.abs(w * dy) + Math.abs(ht * dx)) * 0.28;
+      for (const st of stops) {
+        const bx = w / 2 + (st.t - 0.5) * len * dx;
+        const by = ht / 2 + (st.t - 0.5) * len * dy;
+        for (const o of [-1, 1]) push(bx - dy * across * o, by + dx * across * o, st.color);
+      }
+    } else if (m.fn === 'radial') {
+      const reach = Math.max(Math.hypot(cx, cy), Math.hypot(w - cx, cy), Math.hypot(cx, ht - cy), Math.hypot(w - cx, ht - cy));
+      stops.forEach((st, k) => {
+        if (st.t < 0.08) return push(cx, cy, st.color);
+        for (let j = 0; j < 3; j++) {
+          const ang = (j / 3) * Math.PI * 2 + k * 0.9;
+          push(cx + Math.cos(ang) * st.t * reach, cy + Math.sin(ang) * st.t * reach, st.color);
+        }
+      });
+    } else {
+      const radius = Math.min(w, ht) * 0.38;
+      for (const st of stops) {
+        const a = ((m.cfg.angle + st.t * 360) * Math.PI) / 180;
+        push(cx + Math.sin(a) * radius, cy - Math.cos(a) * radius, st.color);
+      }
+    }
+    return pts.length >= 2 ? pts.slice(0, MAX_POINTS) : null;
+  };
+
   // ---------- lifecycle ----------
   const open = (pick: { el: Element; pseudo: Pseudo; computed: string; layer?: number }) => {
     leave();
@@ -1026,6 +1116,11 @@ export function createCssEditor(ctx: CssEditorContext) {
     removeSelectedStop: () => selected !== null && removeStop(selected),
     /** Write pending changes now (Ctrl/⌘+S, leaving the page). */
     flush: () => save(),
+    meshSeed,
+    /** Where the gradient is written, if found (used to locate an inline-styled element's tag). */
+    get sourceMatch() {
+      return source && source.quality === 'exact' ? { file: source.file, start: source.start } : null;
+    },
     get targetEl() {
       return target?.el ?? null;
     },

@@ -45,9 +45,7 @@ button { cursor: pointer; }
   background: var(--bg); border-left: 1px solid var(--line);
   box-shadow: -12px 0 40px rgba(0,0,0,.3);
 }
-.panel { transition: transform 280ms var(--ease-drawer), opacity 280ms var(--ease-drawer); }
-.panel.from { transform: translateX(calc(100% + 40px)); }
-.panel.left.from { transform: translateX(calc(-100% - 40px)); }
+/* The panel grows out of the launcher pill and shrinks back into it (Web Animations, see morph() in index.ts). */
 .launcher { transform-origin: 100% 100%; transition: transform 200ms var(--ease-out), opacity 200ms var(--ease-out), background-color 150ms ease; }
 .launcher.from { opacity: 0; transform: scale(0.95); }
 .launcher:active { transform: scale(0.97); }
@@ -67,7 +65,7 @@ button { cursor: pointer; }
 /* Collapsible blocks: height/opacity are animated from JS (measured), the end state lives here. */
 .sbody, .pwrap { overflow: hidden; }
 .sbody.shut, .pwrap.shut { height: 0; opacity: 0; }
-.sinner { display: flex; flex-direction: column; gap: 10px; padding: 10px 2px 2px; margin: 0 -2px; }
+.sinner { display: flex; flex-direction: column; gap: 10px; padding: 10px 4px 4px; margin: 0 -4px; }
 .label .act { display: flex; transition: opacity 150ms ease; }
 .section.closed:not(.compact) .label .act:not(.keep) { opacity: 0; pointer-events: none; }
 .label { display: flex; align-items: center; gap: 6px; min-height: 24px; color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .09em; font-weight: 600; }
@@ -140,12 +138,13 @@ input[type=range] { accent-color: #fff; }
 .presets { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
 .preset { height: 38px; border-radius: 8px; border: 1px solid var(--line-strong); cursor: pointer; padding: 0; }
 .preset:hover { outline: 2px solid #fff; outline-offset: 1px; }
+.preset:focus-visible { outline: 2px solid var(--action-line); outline-offset: 1px; }
 /* Saved gradients: a swatch with a remove button that appears on hover. */
 .saved { position: relative; display: grid; }
 .saved .preset { width: 100%; }
-.saved .remove { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; padding: 0; border-radius: 50%; border: 1px solid var(--line-strong);
-  background: #1b1b1b; color: #e4e4e4; opacity: 0; transition: opacity 150ms ease, transform 160ms var(--ease-out); }
-.saved .remove svg { width: 11px; height: 11px; }
+.saved .remove { position: absolute; top: 3px; right: 3px; width: 18px; height: 18px; padding: 0; border-radius: 50%; border: 0;
+  background: rgba(0,0,0,.6); color: #fff; opacity: 0; transition: opacity 150ms ease, transform 160ms var(--ease-out); }
+.saved .remove svg { width: 10px; height: 10px; }
 .saved:hover .remove, .saved .remove:focus-visible { opacity: 1; }
 @media (hover: none) { .saved .remove { opacity: 1; } }
 
@@ -153,13 +152,15 @@ input[type=range] { accent-color: #fff; }
 .expand { position: fixed; inset: 0; z-index: 1; pointer-events: auto; }
 .expand .backdrop { position: absolute; inset: 0; background: rgba(8, 8, 10, .78); transition: opacity 200ms var(--ease-out); }
 .expand-box { position: fixed; display: block; border-radius: 12px; overflow: hidden;
-  box-shadow: 0 0 0 1px rgba(255,255,255,.12), 0 30px 80px rgba(0,0,0,.55);
-  transition: transform 240ms var(--ease-out), opacity 200ms var(--ease-out); }
-.expand.from .backdrop { opacity: 0; }
-.expand.from .expand-box { opacity: 0; transform: scale(0.96); }
+  box-shadow: 0 0 0 1px rgba(255,255,255,.12), 0 30px 80px rgba(0,0,0,.55); }
 
 .hint { color: var(--muted); font-size: 12px; }
 .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; background: #1b1b1b; border: 1px solid var(--line); border-radius: 8px; padding: 8px; white-space: pre-wrap; word-break: break-all; user-select: all; }
+/* CSS editor sections have no collapsible body, so they space their own rows. */
+.section.flat { gap: 10px; }
+.section.flat > .label > .btn { margin-left: auto; }
+.section.flat .points { gap: 4px; }
+.section.flat .bar { margin: 6px 0; }
 kbd { font: 10px ui-monospace, monospace; padding: 1px 4px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
 
 .stage { position: fixed; inset: 0; pointer-events: none; z-index: 1; }
@@ -247,12 +248,10 @@ kbd { font: 10px ui-monospace, monospace; padding: 1px 4px; border-radius: 4px; 
 
 /* Reduced motion: keep fades (they aid comprehension), drop movement. */
 @media (prefers-reduced-motion: reduce) {
-  .panel.from, .panel.left.from { transform: none; opacity: 0; }
   .toolbar.from { transform: translateX(-50%); }
   .launcher.from, .launcher:active { transform: none; }
   .btn:active:not(:disabled), .seg button:active, .preset:active, .tool:active { transform: none; }
   .tool .tip, .toast { transform: translate(-50%, 0) !important; }
   .label .chev { transition-duration: 0ms; }
-  .expand.from .expand-box { transform: none; }
 }
 `;

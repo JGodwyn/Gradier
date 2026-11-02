@@ -1,5 +1,5 @@
 import { findGradients, type TextRange } from '../core/css-gradient';
-import { TAG } from '../core/element';
+import { LAYER_ATTR, LAYER_MARK, TAG } from '../core/element';
 import { h } from './dom';
 
 export type Pseudo = '' | '::before' | '::after';
@@ -25,6 +25,10 @@ export function gradientOf(el: Element): PickResult | null {
     const name = el.getAttribute('name');
     if (name) return { kind: 'mesh', el: el as HTMLElement, name };
   }
+  // An element turned into a mesh gradient (`data-gradier`): edit its mesh layer, not the CSS underneath.
+  const layer = el.hasAttribute(LAYER_ATTR) ? Array.from(el.children).find((c) => c.hasAttribute(LAYER_MARK)) : undefined;
+  const layerName = layer?.getAttribute('name');
+  if (layer && layerName) return { kind: 'mesh', el: layer as HTMLElement, name: layerName };
   for (const pseudo of ['', '::before', '::after'] as Pseudo[]) {
     const cs = getComputedStyle(el, pseudo || null);
     if (pseudo && (cs.content === 'none' || cs.content === 'normal' || cs.display === 'none')) continue;

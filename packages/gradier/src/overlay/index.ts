@@ -1,11 +1,12 @@
 import { gradientToCSS } from '../core/css';
-import { defineGradientElement } from '../core/element';
+import { defineGradientElement, LAYER_ATTR } from '../core/element';
 import { MeshRenderer } from '../core/renderer';
 import { getGradient, getGradients, mountedElements, registerGradients, removeGradient, setGradient, subscribe } from '../core/store';
 import { arcSamples, bendPath, cumulative, defaultBulge, pointAlong, samplePath, simplifyStroke } from '../core/geometry';
 import {
   AREA_RADIUS,
   BLEND_MODES,
+  DEFAULTS,
   defaultArms,
   isValidName,
   MAX_PATH_POINTS,
@@ -203,7 +204,61 @@ function boot() {
       if (css.close()) state.mode = 'mesh';
       render();
     },
+    convert: (from) => void convertToMesh(from),
+    library: () => library,
+    swatch: (g) => gradientToCSS(g),
   });
+
+  /**
+   * Turn the element being edited in the CSS editor into a mesh gradient: a new gradient seeded from its CSS stops
+   * (or a saved gradient), shown right away through a `data-gradier` layer, and written into the markup so it stays.
+   */
+  const convertToMesh = async (from?: Gradient) => {
+    const el = css.targetEl as HTMLElement | null;
+    if (!el) return;
+    const points = from ? null : css.meshSeed();
+    if (!from && !points) return toast("Couldn't read this gradient's colours", true);
+    const at = css.sourceMatch;
+    const base =
+      (el.id || [...el.classList].find((c) => !c.startsWith('gradier')) || el.tagName.toLowerCase())
+        .replace(/[^\w-]+/g, '-')
+        .replace(/^[^a-zA-Z0-9]+/, '')
+        .slice(0, 48) || 'gradient';
+    let name = base;
+    for (let n = 2; getGradient(name); n++) name = `${base}-${n}`;
+    const g = normalizeGradient(from ? structuredClone(from) : { ...DEFAULTS, softness: 0.6, warp: 0.08, grain: 0.03, points });
+    touched.add(name);
+    setGradient(name, g);
+    css.close();
+    state.mode = 'mesh';
+    state.selected = name;
+    state.point = null;
+    state.target = null;
+    state.expanded = false;
+    el.setAttribute(LAYER_ATTR, name);
+    render();
+    if (!state.connected) return toast(`"${name}" is a mesh gradient on this page. Add data-gradier="${name}" to the element to keep it.`, true);
+    // Write the gradient first: changing the markup may reload the page.
+    while (state.saving) await new Promise((r) => setTimeout(r, 50));
+    await save();
+    const runtime = (globalThis as unknown as Record<string, boolean | undefined>).__GRADIER_RUNTIME__;
+    const needsRuntime = runtime ? '' : " Load the Gradier runtime on this page (import { registerGradients } from 'gradier') so it shows outside the editor.";
+    try {
+      const res = await fetch(`${BASE}markup/layer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          element: { tag: el.tagName.toLowerCase(), id: el.id, classes: [...el.classList], text: (el.textContent ?? '').trim().slice(0, 80), at },
+        }),
+      });
+      const data = (await res.json()) as { file?: string; line?: number; error?: string };
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      toast(`Now a mesh gradient · ${data.file}:${data.line}.${needsRuntime}`, !!needsRuntime);
+    } catch (err) {
+      toast(`"${name}" is a mesh gradient here, but ${err instanceof Error ? err.message : err} Add data-gradier="${name}" to the element to keep it.`, true);
+    }
+  };
 
   /** Enter pick mode: the next click on the page chooses which gradient to edit. */
   const pick = () => {
@@ -822,12 +877,9 @@ function boot() {
           'library',
           `Saved  ${library.length}`,
           {
-            collapsible: true,
-            open: false,
-            keepActions: true,
             actions: [h('button', { className: 'btn small', type: 'button', title: 'Save this gradient to reuse it in any project', onclick: saveToLibrary }, '+ Save')],
           },
-          library.length ? saved : h('div', { className: 'hint' }, 'Gradients you save show up here, in every project. Click one to apply it.'),
+          library.length ? saved : h('div', { className: 'hint' }, 'Gradients you save show up here, in every project. Select any gradient, then click one to apply it.'),
         ),
       );
 
@@ -1061,6 +1113,28 @@ function boot() {
     setTimeout(() => el.classList.contains('from') && el.remove(), 300);
   };
 
+  /** Transform that maps rect `to` onto rect `from` (with transform-origin 0 0). */
+  const mapRect = (from: DOMRect, to: DOMRect) =>
+    `translate(${from.left - to.left}px, ${from.top - to.top}px) scale(${from.width / Math.max(to.width, 1)}, ${from.height / Math.max(to.height, 1)})`;
+  const visible = (r: DOMRect | undefined): r is DOMRect => !!r && r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < innerHeight;
+
+  /**
+   * Grow `el` out of the rect `from` (or shrink it back into it when `out`), as one shape changing size and place.
+   * Reduced motion keeps only the fade. Returns the animation so callers can remove the element when it ends.
+   */
+  const morph = (el: HTMLElement, from: DOMRect | undefined, opts: { out?: boolean; duration: number; fade: boolean }) => {
+    const to = el.getBoundingClientRect();
+    el.getAnimations().forEach((a) => a.cancel());
+    el.style.transformOrigin = '0 0';
+    const small = visible(from) && !reducedMotion?.matches ? mapRect(from, to) : reducedMotion?.matches ? 'none' : 'scale(0.96)';
+    const fadeAt = opts.out ? 0.6 : 0.35;
+    const frames: Keyframe[] = opts.fade
+      ? [{ transform: small, opacity: 0 }, { opacity: 1, offset: fadeAt }, { transform: 'none', opacity: 1 }]
+      : [{ transform: small }, { transform: 'none' }];
+    if (opts.out) frames.reverse().forEach((f) => f.offset !== undefined && (f.offset = 1 - (f.offset as number)));
+    return el.animate(frames, { duration: opts.duration, easing: 'cubic-bezier(0.32, 0.72, 0, 1)', fill: opts.out ? 'forwards' : 'none' });
+  };
+
   const render = () => {
     // Reduced motion still animates: the CSS swaps movement for a plain fade.
     const animate = animateNext;
@@ -1072,23 +1146,30 @@ function boot() {
       state.expanded = false;
       syncExpand(undefined, animate);
       css.clearStage();
-      if (panel) animate ? leave(panel) : panel.remove();
+      const closing = panel;
       panel = null;
       structure = '';
       if (!launcher) {
         launcher = h('button', { className: 'launcher', type: 'button', title: 'Open Gradier (Alt+G)', onclick: () => setOpen(true, true) });
         launcher.style.pointerEvents = 'auto';
         root.append(launcher);
-        if (animate) enter(launcher);
+        // The pill reappears as the panel lands in it.
+        if (animate && closing) launcher.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 120, delay: 140, easing: 'ease-out', fill: 'backwards' });
+        else if (animate) enter(launcher);
       }
       launcher.innerHTML = `<span class="logo"></span>Gradier${count ? '<span class="dot"></span>' : ''}`;
+      if (closing) {
+        if (animate) morph(closing, launcher.getBoundingClientRect(), { out: true, duration: 240, fade: true }).finished.then(() => closing.remove(), () => {});
+        else closing.remove();
+      }
       animate ? leave(toolbar.el) : toolbar.el.remove();
       stage.replaceChildren();
       overlays.clear();
       clearHandles();
       return;
     }
-    launcher?.remove();
+    const launchRect = launcher?.getBoundingClientRect();
+    if (launcher) animate ? leave(launcher) : launcher.remove();
     launcher = null;
     if (state.mode === 'css' && !css.active) state.mode = 'mesh';
     ensureSelection();
@@ -1116,7 +1197,7 @@ function boot() {
       const opening = !panel;
       panel ? panel.replaceWith(next) : root.append(next);
       panel = next;
-      if (opening && animate) enter(panel);
+      if (opening && animate) morph(panel, launchRect, { duration: 280, fade: true });
       panel.querySelector('.body')!.scrollTop = scroll;
     }
     const showToolbar = state.mode === 'mesh' && !cancelPick && !!g;
@@ -1153,7 +1234,16 @@ function boot() {
     const kind = state.expanded ? state.mode : null;
     if (expandLayer && kind !== expandKind) {
       const old = expandLayer;
-      animate && !kind ? leave(old) : old.remove();
+      const box = expandBox!;
+      if (animate && !kind) {
+        // Shrink back into the element on the page.
+        const home = expandKind === 'css' ? css.targetEl : namedElements().find((el) => el.getAttribute('name') === state.selected);
+        const r = home?.getBoundingClientRect();
+        const back = old.querySelector<HTMLElement>('.backdrop')!;
+        back.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 220, easing: 'ease-out', fill: 'forwards' });
+        old.style.pointerEvents = 'none';
+        morph(box, r, { out: true, duration: 240, fade: !visible(r) }).finished.then(() => old.remove(), () => old.remove());
+      } else old.remove();
       expandLayer = expandBox = null;
       css.setExpandEl(null);
     }
@@ -1185,7 +1275,11 @@ function boot() {
       root.insertBefore(expandLayer, stage);
       if (kind === 'css') css.setExpandEl(expandBox);
       layoutExpand();
-      if (animate) enter(expandLayer);
+      if (animate) {
+        // Grow out of the element's spot on the page into the middle of the screen.
+        expandLayer.querySelector<HTMLElement>('.backdrop')!.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 220, easing: 'ease-out' });
+        morph(expandBox, visible(r) ? r : undefined, { duration: 280, fade: !visible(r) });
+      }
     }
     if (kind === 'mesh' && state.selected && expandBox!.getAttribute('name') !== state.selected) expandBox!.setAttribute('name', state.selected);
   };
