@@ -135,6 +135,7 @@ After picking a gradient, the panel shows its stops and settings, and the page u
 | Save to source | Automatic: changes are written back shortly after you stop editing (HTML and server templates, which reload the page, are written when you move on to another gradient). **⌘/Ctrl+S** writes right away. The **Source** row shows the file and line; if several places match, choose one or update all |
 | Expand | **F** or the expand button in the header: edit the gradient large in the middle of the screen. **F**, **Esc** or a click outside goes back |
 | Can't save automatically | **Copy CSS**, or **Copy for AI agent** (an edit request for a coding agent) |
+| Make it a mesh gradient | **Make it a mesh gradient** turns the element into a mesh gradient seeded from its colours (or start from one of your saved gradients), so you can add points, curves, grain and filters. Gradier adds `data-gradier="name"` to the element's tag in your source; the page needs the Gradier runtime (`import { registerGradients } from 'gradier'` plus your gradients file) for it to show outside the editor |
 
 ### Mesh gradients
 
@@ -185,9 +186,19 @@ Edits are saved to the gradients file (default `src/gradients.json`) automatical
 
 #### Saved gradients and the expanded view
 
-**Saved** (between Gradient and Points, collapsed by default) is your own library: **+ Save** keeps the current gradient, click a swatch to apply it, hover it to remove it. The library is stored in `~/.gradier/library.json`, so it follows you across projects.
+**Saved** (between Gradient and Points, always visible) is your own library: **+ Save** keeps the current gradient; select any gradient and click a swatch to apply it; hover a swatch to remove it. The library is stored in `~/.gradier/library.json`, so it follows you across projects.
 
 **F** or the expand button in the header shows the gradient large in the middle of the screen, at the element's aspect ratio, with all the handles and tools. **F**, **Esc** or a click outside returns to the page.
+
+### Any element as a mesh gradient
+
+Add `data-gradier="name"` to any element and the runtime puts that mesh gradient behind its content, following its rounded corners, without changing the tag:
+
+```html
+<button class="cta" data-gradier="cta">Get started</button>
+```
+
+This is what **Make it a mesh gradient** writes for you.
 
 ## Gradient format
 
