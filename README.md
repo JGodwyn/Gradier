@@ -325,3 +325,7 @@ npm publish -w gradier
 ```
 
 Publishing builds the package, copies this README into it, and runs the type check and tests first; it stops if any of them fail. For later releases, bump the version first (`npm version patch -w gradier`), then publish again.
+
+## License
+
+MIT © GodwinJohn. See [LICENSE](https://github.com/JGodwyn/Gradier/blob/main/LICENSE).
