@@ -1,7 +1,10 @@
 // Icons from Phosphor (https://phosphoricons.com, MIT), regular weight, inlined at build time.
 import arrowsOut from '@phosphor-icons/core/regular/arrows-out.svg';
+import bookmark from '@phosphor-icons/core/regular/bookmark-simple.svg';
 import caretDown from '@phosphor-icons/core/regular/caret-down.svg';
 import caretLeft from '@phosphor-icons/core/regular/caret-left.svg';
+import cornersIn from '@phosphor-icons/core/regular/corners-in.svg';
+import cornersOut from '@phosphor-icons/core/regular/corners-out.svg';
 import crosshair from '@phosphor-icons/core/regular/crosshair-simple.svg';
 import eye from '@phosphor-icons/core/regular/eye.svg';
 import eyeSlash from '@phosphor-icons/core/regular/eye-slash.svg';
@@ -35,6 +38,9 @@ export const ICONS = {
   back: caretLeft,
   chevron: caretDown,
   reset,
+  expand: cornersOut,
+  collapse: cornersIn,
+  bookmark,
 };
 
 export const TOOL_GLYPHS = {

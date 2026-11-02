@@ -55,7 +55,7 @@ button { cursor: pointer; }
 .panel.left { right: auto; left: 0; border-left: 0; border-right: 1px solid var(--line); box-shadow: 12px 0 40px rgba(0,0,0,.3); }
 .head { display: flex; align-items: center; gap: 4px; height: 56px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--line); user-select: none; flex: none; }
 .head .logo { width: 16px; height: 16px; margin-right: 4px; }
-.head .title { font-weight: 650; flex: 1; font-size: 13px; }
+.head .title { font-weight: 650; flex: 1; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .head-sep { width: 1px; height: 18px; margin: 0 4px; background: var(--line-strong); }
 .body { overflow-y: auto; padding: 4px 16px 20px; display: flex; flex-direction: column; flex: 1; scrollbar-width: thin; scrollbar-color: #444 transparent; }
 .foot { border-top: 1px solid var(--line); padding: 10px 16px; display: flex; align-items: center; gap: 8px; flex: none; }
@@ -69,7 +69,7 @@ button { cursor: pointer; }
 .sbody.shut, .pwrap.shut { height: 0; opacity: 0; }
 .sinner { display: flex; flex-direction: column; gap: 10px; padding: 10px 2px 2px; margin: 0 -2px; }
 .label .act { display: flex; transition: opacity 150ms ease; }
-.section.closed:not(.compact) .label .act { opacity: 0; pointer-events: none; }
+.section.closed:not(.compact) .label .act:not(.keep) { opacity: 0; pointer-events: none; }
 .label { display: flex; align-items: center; gap: 6px; min-height: 24px; color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .09em; font-weight: 600; }
 .label.toggle { cursor: pointer; }
 .label.toggle:hover { color: var(--fg); }
@@ -140,6 +140,23 @@ input[type=range] { accent-color: #fff; }
 .presets { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
 .preset { height: 38px; border-radius: 8px; border: 1px solid var(--line-strong); cursor: pointer; padding: 0; }
 .preset:hover { outline: 2px solid #fff; outline-offset: 1px; }
+/* Saved gradients: a swatch with a remove button that appears on hover. */
+.saved { position: relative; display: grid; }
+.saved .preset { width: 100%; }
+.saved .remove { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; padding: 0; border-radius: 50%; border: 1px solid var(--line-strong);
+  background: #1b1b1b; color: #e4e4e4; opacity: 0; transition: opacity 150ms ease, transform 160ms var(--ease-out); }
+.saved .remove svg { width: 11px; height: 11px; }
+.saved:hover .remove, .saved .remove:focus-visible { opacity: 1; }
+@media (hover: none) { .saved .remove { opacity: 1; } }
+
+/* Expanded view: the gradient, large, in the free space beside the panel. Handles stay on the stage above it. */
+.expand { position: fixed; inset: 0; z-index: 1; pointer-events: auto; }
+.expand .backdrop { position: absolute; inset: 0; background: rgba(8, 8, 10, .78); transition: opacity 200ms var(--ease-out); }
+.expand-box { position: fixed; display: block; border-radius: 12px; overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.12), 0 30px 80px rgba(0,0,0,.55);
+  transition: transform 240ms var(--ease-out), opacity 200ms var(--ease-out); }
+.expand.from .backdrop { opacity: 0; }
+.expand.from .expand-box { opacity: 0; transform: scale(0.96); }
 
 .hint { color: var(--muted); font-size: 12px; }
 .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; background: #1b1b1b; border: 1px solid var(--line); border-radius: 8px; padding: 8px; white-space: pre-wrap; word-break: break-all; user-select: all; }
@@ -236,5 +253,6 @@ kbd { font: 10px ui-monospace, monospace; padding: 1px 4px; border-radius: 4px; 
   .btn:active:not(:disabled), .seg button:active, .preset:active, .tool:active { transform: none; }
   .tool .tip, .toast { transform: translate(-50%, 0) !important; }
   .label .chev { transition-duration: 0ms; }
+  .expand.from .expand-box { transform: none; }
 }
 `;

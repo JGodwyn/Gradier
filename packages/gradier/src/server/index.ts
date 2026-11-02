@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isValidName, normalizeGradient, type GradientMap } from '../core/types';
@@ -21,6 +22,11 @@ export interface GradierServerOptions {
    * origin are always allowed. `*` is a wildcard, e.g. `https://*.app.github.dev`.
    */
   allowedOrigins?: string[];
+  /**
+   * JSON file for your saved-gradients library (shared across projects). Defaults to
+   * `~/.gradier/library.json`.
+   */
+  libraryFile?: string;
 }
 
 export type Middleware = (req: IncomingMessage, res: ServerResponse, next?: () => void) => void;
@@ -56,6 +62,44 @@ export async function readGradients(file: string): Promise<GradientMap> {
 }
 
 async function writeGradients(file: string, data: GradientMap) {
+  await mkdir(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+  await rename(tmp, file);
+}
+
+/** One gradient in the saved-gradients library. */
+export interface LibraryItem {
+  id: string;
+  gradient: unknown;
+  savedAt: number;
+}
+
+export const MAX_LIBRARY = 200;
+
+export function resolveLibraryFile(options: GradierServerOptions = {}): string {
+  return options.libraryFile ? path.resolve(options.libraryFile) : path.join(os.homedir(), '.gradier', 'library.json');
+}
+
+export async function readLibrary(file: string): Promise<LibraryItem[]> {
+  if (!existsSync(file)) return [];
+  try {
+    const data = JSON.parse(await readFile(file, 'utf8')) as { items?: unknown };
+    return cleanLibrary(data.items);
+  } catch {
+    return [];
+  }
+}
+
+function cleanLibrary(items: unknown): LibraryItem[] {
+  if (!Array.isArray(items)) return [];
+  return items
+    .filter((i): i is LibraryItem => !!i && typeof i === 'object' && typeof (i as LibraryItem).id === 'string' && !!(i as LibraryItem).gradient)
+    .slice(0, MAX_LIBRARY)
+    .map((i) => ({ id: i.id.slice(0, 64), gradient: normalizeGradient(i.gradient), savedAt: Number(i.savedAt) || 0 }));
+}
+
+async function writeJson(file: string, data: unknown) {
   await mkdir(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
   await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
@@ -121,6 +165,7 @@ function send(res: ServerResponse, status: number, body: unknown, type = 'applic
  */
 export function createGradierMiddleware(options: GradierServerOptions = {}): Middleware {
   const file = resolveGradientsFile(options);
+  const libraryFile = resolveLibraryFile(options);
   const root = path.resolve(options.root ?? process.cwd());
   const extraOrigins = (options.allowedOrigins ?? []).map(
     (o) => new RegExp(`^${o.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')}$`, 'i'),
@@ -167,7 +212,10 @@ export function createGradierMiddleware(options: GradierServerOptions = {}): Mid
       if (route === '/api' && (req.method === 'GET' || req.method === 'HEAD')) {
         return send(res, 200, { file: path.relative(root, file), gradients: await readGradients(file) });
       }
-      if (req.method === 'POST' && (route === '/api' || route.startsWith('/css/'))) {
+      if (route === '/library' && (req.method === 'GET' || req.method === 'HEAD')) {
+        return send(res, 200, { items: await readLibrary(libraryFile) });
+      }
+      if (req.method === 'POST' && (route === '/api' || route === '/library' || route.startsWith('/css/'))) {
         if (!String(req.headers['content-type']).includes('application/json')) {
           throw new HttpError(415, 'Expected application/json');
         }
@@ -186,6 +234,11 @@ export function createGradierMiddleware(options: GradierServerOptions = {}): Mid
         if (route === '/api') {
           const gradients = await serial(() => applySave(file, body as SaveRequest));
           return send(res, 200, { file: path.relative(root, file), gradients });
+        }
+        if (route === '/library') {
+          const items = cleanLibrary((body as { items?: unknown }).items);
+          await serial(() => writeJson(libraryFile, { items }));
+          return send(res, 200, { items });
         }
         if (route === '/css/find') {
           return send(res, 200, { matches: await findInSource(root, body as FindRequest) });

@@ -160,7 +160,7 @@ The server only scans and writes inside `root`, and skips `node_modules`, `dist`
 4. If a browser tool is available (e.g. Playwright), open the page and check `document.getElementById('gradier-overlay')` exists and the console has no `[gradier]` errors. Otherwise tell the user to look for the **Gradier** pill in the bottom-right corner.
 5. Production safety: for Vite, build and confirm `grep -r "__gradier" dist/` finds nothing. For other frameworks, confirm the script tag is behind a dev-only condition.
 
-Then tell the user how to start: **Alt+P** and click a gradient to edit it, or **Alt+G** for mesh gradients; **⌘/Ctrl+S** saves. Point them to [EDITOR.md](EDITOR.md)'s contents for anything more specific they ask.
+Then tell the user how to start: **Alt+P** and click a gradient to edit it, or **Alt+G** for mesh gradients; edits save automatically. Point them to [EDITOR.md](EDITOR.md)'s contents for anything more specific they ask.
 
 ## 5. What saving CSS gradients can and cannot handle
 
@@ -226,6 +226,8 @@ Base: `<origin>/__gradier`. Requests must come from a localhost origin, the serv
 | `GET /overlay.js` | | The overlay script |
 | `GET /api` | | `{ file, gradients }` |
 | `POST /api` | `{ save?: {name: gradient}, delete?: [name], rename?: [{from,to}] }` | `{ file, gradients }` |
+| `GET /library` | | `{ items: [{ id, gradient, savedAt }] }` (saved gradients, `~/.gradier/library.json`) |
+| `POST /library` | `{ items }` | `{ items }` |
 | `POST /css/find` | `{ candidates: [gradient strings], hints?: { files?: [path], selectors?: [selector] } }` | `{ matches: [{ file, line, column, start, end, text, quality, selector, score }] }` |
 | `POST /css/replace` | `{ edits: [{ file, start, end, text, replacement }] }` | `{ results: [{ file, start, end, text, line, column }] }` |
 
