@@ -36,6 +36,12 @@ export function attachGradientLayers(): void {
   if (g.__GRADIER_LAYERS__) return;
   g.__GRADIER_LAYERS__ = true;
 
+  // A mesh converted from a ::before/::after gradient replaces that gradient.
+  const style = document.createElement('style');
+  style.setAttribute('data-gradier-runtime', '');
+  style.textContent = `[${LAYER_ATTR}-replaces~="before"]::before,[${LAYER_ATTR}-replaces~="after"]::after{background-image:none!important}`;
+  (document.head ?? document.documentElement).append(style);
+
   const sync = (host: HTMLElement) => {
     const name = host.getAttribute(LAYER_ATTR);
     let layer = Array.from(host.children).find((c) => c.hasAttribute(LAYER_MARK)) as HTMLElement | undefined;

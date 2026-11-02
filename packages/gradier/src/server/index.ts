@@ -28,6 +28,10 @@ export interface GradierServerOptions {
    * `~/.gradier/library.json`.
    */
   libraryFile?: string;
+  /** Called with the absolute path of every source file Gradier writes. */
+  onWrite?: (file: string, kind: 'gradients' | 'css' | 'markup') => void;
+  /** The host skips page reloads for HTML that Gradier edits (the overlay applies those edits live). */
+  quietHtml?: boolean;
 }
 
 export type Middleware = (req: IncomingMessage, res: ServerResponse, next?: () => void) => void;
@@ -211,7 +215,7 @@ export function createGradierMiddleware(options: GradierServerOptions = {}): Mid
         return send(res, 200, src, 'text/javascript; charset=utf-8');
       }
       if (route === '/api' && (req.method === 'GET' || req.method === 'HEAD')) {
-        return send(res, 200, { file: path.relative(root, file), gradients: await readGradients(file) });
+        return send(res, 200, { file: path.relative(root, file), gradients: await readGradients(file), quietHtml: !!options.quietHtml });
       }
       if (route === '/library' && (req.method === 'GET' || req.method === 'HEAD')) {
         return send(res, 200, { items: await readLibrary(libraryFile) });
@@ -234,6 +238,7 @@ export function createGradierMiddleware(options: GradierServerOptions = {}): Mid
         };
         if (route === '/api') {
           const gradients = await serial(() => applySave(file, body as SaveRequest));
+          options.onWrite?.(file, 'gradients');
           return send(res, 200, { file: path.relative(root, file), gradients });
         }
         if (route === '/library') {
@@ -243,14 +248,18 @@ export function createGradierMiddleware(options: GradierServerOptions = {}): Mid
         }
         if (route === '/markup/layer') {
           const { element, name } = body as { element: MarkupTarget; name: string };
-          return send(res, 200, await serial(() => addLayerAttribute(root, element ?? ({} as MarkupTarget), name)));
+          const result = await serial(() => addLayerAttribute(root, element ?? ({} as MarkupTarget), name));
+          options.onWrite?.(path.resolve(root, result.file), 'markup');
+          return send(res, 200, result);
         }
         if (route === '/css/find') {
           return send(res, 200, { matches: await findInSource(root, body as FindRequest) });
         }
         if (route === '/css/replace') {
           const edits = (body as { edits: ReplaceEdit[] }).edits;
-          return send(res, 200, { results: await serial(() => replaceInSource(root, edits)) });
+          const results = await serial(() => replaceInSource(root, edits));
+          for (const f of new Set(results.map((r) => r.file))) options.onWrite?.(path.resolve(root, f), 'css');
+          return send(res, 200, { results });
         }
       }
       send(res, 404, { error: 'Not found' });

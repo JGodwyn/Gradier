@@ -198,7 +198,7 @@ Add `data-gradier="name"` to any element and the runtime puts that mesh gradient
 <button class="cta" data-gradier="cta">Get started</button>
 ```
 
-This is what **Make it a mesh gradient** writes for you.
+This is what **Make it a mesh gradient** writes for you. When the gradient came from a `::before`/`::after`, it also writes `data-gradier-replaces="before"` (or `after`), which hides that pseudo-element's gradient so the mesh takes its place.
 
 ## Gradient format
 

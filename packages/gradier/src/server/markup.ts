@@ -13,6 +13,8 @@ export interface MarkupTarget {
   text?: string;
   /** A source location known to be inside the element's opening tag (e.g. its inline `style` gradient). */
   at?: { file: string; start: number };
+  /** The gradient came from this pseudo-element; the mesh replaces it (`data-gradier-replaces`). */
+  replaces?: 'before' | 'after';
 }
 
 /** Files that can contain markup (stylesheets can't). */
@@ -112,10 +114,16 @@ export async function addLayerAttribute(root: string, target: MarkupTarget, name
   if (!hit) throw new SourceError(404, `Couldn't find the element's tag in your source.`);
 
   const text = await readFile(hit.file, 'utf8');
-  const existing = new RegExp(`(\\s)${ATTR}\\s*=\\s*("[^"]*"|'[^']*')`).exec(hit.attrs);
-  const next = existing
-    ? text.slice(0, hit.attrsStart + existing.index) + `${existing[1]}${ATTR}="${name}"` + text.slice(hit.attrsStart + existing.index + existing[0].length)
-    : text.slice(0, hit.at) + ` ${ATTR}="${name}"` + text.slice(hit.at);
+  const upsert = (attrs: string, attr: string, value: string) => {
+    const existing = new RegExp(`(\\s)${attr}\\s*=\\s*("[^"]*"|'[^']*')`).exec(attrs);
+    return existing
+      ? attrs.slice(0, existing.index) + `${existing[1]}${attr}="${value}"` + attrs.slice(existing.index + existing[0].length)
+      : ` ${attr}="${value}"${attrs}`;
+  };
+  let attrs = hit.attrs;
+  if (target.replaces === 'before' || target.replaces === 'after') attrs = upsert(attrs, `${ATTR}-replaces`, target.replaces);
+  attrs = upsert(attrs, ATTR, name);
+  const next = text.slice(0, hit.attrsStart) + attrs + text.slice(hit.attrsStart + hit.attrs.length);
   const tmp = `${hit.file}.${process.pid}.gradier.tmp`;
   await writeFile(tmp, next, 'utf8');
   await rename(tmp, hit.file);

@@ -64,6 +64,8 @@ export interface CssEditorContext {
   library(): Array<{ id: string; gradient: Gradient }>;
   /** CSS approximation of a mesh gradient, for swatches. */
   swatch(g: Gradient): string;
+  /** The dev server skips page reloads for HTML that Gradier edits, so HTML can save as you go. */
+  quietHtml(): boolean;
 }
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
@@ -359,7 +361,8 @@ export function createCssEditor(ctx: CssEditorContext) {
   // so the page doesn't reload under you mid-edit.
   const RELOADS_PAGE = /\.(html?|php|erb|liquid|njk|hbs|twig|ejs|pug|haml|slim|cshtml|razor|mdx?)$/i;
   const SAVE_DELAY = 700;
-  const savesOnLeave = () => !!source && RELOADS_PAGE.test(source.file);
+  const QUIET = /\.html?$/i;
+  const savesOnLeave = () => !!source && RELOADS_PAGE.test(source.file) && !(ctx.quietHtml() && QUIET.test(source.file));
 
   const scheduleSave = () => {
     clearTimeout(saveTimer);
@@ -417,6 +420,11 @@ export function createCssEditor(ctx: CssEditorContext) {
           const replaced = new Set(updated.map((u) => u.orig));
           matches = matches.map((m) => (replaced.has(m) ? updated.find((u) => u.orig === m)!.next : m));
           if (source === src || replaced.has(source!)) source = primary;
+        }
+        // HTML edits don't reload the page any more, so update an inline style in place to match the file.
+        if (ctx.quietHtml() && QUIET.test(src.file)) {
+          const style = t.el.getAttribute('style');
+          if (style?.includes(src.text)) t.el.setAttribute('style', style.replace(src.text, replacement));
         }
         settlePreview(t, replacement);
       } catch (err) {
@@ -994,57 +1002,145 @@ export function createCssEditor(ctx: CssEditorContext) {
     return [255, 255, 255];
   };
 
-  /** Mesh points that approximate the current CSS gradient (colours placed along its line, rings or sweep). */
+  type Rgba = [number, number, number, number];
+
+  /** CSS radial-gradient ray lengths (rx, ry) for a box, following the size keyword or explicit lengths. */
+  const radii = (m: Model, w: number, ht: number, cx: number, cy: number): [number, number] => {
+    const size = m.cfg.size.toLowerCase();
+    const sx = [cx, w - cx];
+    const sy = [cy, ht - cy];
+    const len = (v: string, of: number) => (v.endsWith('%') ? (Number.parseFloat(v) / 100) * of : Number.parseFloat(v));
+    if (!/side|corner/.test(size)) {
+      const parts = size.split(/\s+/);
+      const rx = len(parts[0] ?? '0', w) || 1;
+      return [rx, parts[1] ? len(parts[1], ht) || 1 : rx];
+    }
+    const far = size.startsWith('farthest');
+    const pick = (a: number[]) => (far ? Math.max(...a) : Math.min(...a));
+    const corners = [0, w].flatMap((x) => [0, ht].map((y) => Math.hypot(x - cx, y - cy)));
+    if (m.cfg.shape === 'circle') {
+      const r = size.endsWith('side') ? pick([...sx, ...sy]) : pick(corners);
+      return [r || 1, r || 1];
+    }
+    const rx = pick(sx) || 1;
+    const ry = pick(sy) || 1;
+    return size.endsWith('side') ? [rx, ry] : [rx * Math.SQRT2, ry * Math.SQRT2];
+  };
+
+  /** Colour of one gradient layer at (x, y) in a w×h box, interpolated in premultiplied sRGB like CSS. */
+  const layerColorAt = (m: Model, colors: Rgba[], x: number, y: number, w: number, ht: number): Rgba => {
+    const cx = ((m.cfg.x ?? 50) / 100) * w;
+    const cy = ((m.cfg.y ?? 50) / 100) * ht;
+    let t: number;
+    if (m.fn === 'linear') {
+      let angle = m.cfg.angle;
+      if (m.cfg.corner) {
+        const c = m.cfg.corner;
+        angle = ((Math.atan2(c.includes('left') ? -w : w, c.includes('top') ? ht : -ht) * 180) / Math.PI + 360) % 360;
+      }
+      const a = (angle * Math.PI) / 180;
+      const [dx, dy] = [Math.sin(a), -Math.cos(a)];
+      t = ((x - w / 2) * dx + (y - ht / 2) * dy) / (Math.abs(w * dx) + Math.abs(ht * dy) || 1) + 0.5;
+    } else if (m.fn === 'radial') {
+      const [rx, ry] = radii(m, w, ht, cx, cy);
+      t = Math.hypot((x - cx) / rx, (y - cy) / ry);
+    } else {
+      const deg = (Math.atan2(x - cx, -(y - cy)) * 180) / Math.PI - m.cfg.angle;
+      t = (((deg % 360) + 360) % 360) / 360;
+    }
+    const pct = stopPercents(m.stops.filter((st) => st.color)).map((v) => v / 100);
+    if (m.repeating && pct.length > 1) {
+      const span = pct.at(-1)! - pct[0]!;
+      if (span > 0) t = pct[0]! + ((((t - pct[0]!) % span) + span) % span);
+    }
+    let k = pct.findIndex((v) => v >= t);
+    if (k === -1) return colors.at(-1)!;
+    if (k === 0) return colors[0]!;
+    const span = pct[k]! - pct[k - 1]!;
+    const f = span > 0 ? (t - pct[k - 1]!) / span : 1;
+    const [a, b] = [colors[k - 1]!, colors[k]!];
+    const alpha = a[3] + (b[3] - a[3]) * f;
+    const ch = (j: number) => (alpha ? (a[j]! * a[3] + (b[j]! * b[3] - a[j]! * a[3]) * f) / alpha : 0);
+    return [ch(0), ch(1), ch(2), alpha];
+  };
+
+  /**
+   * Mesh points that reproduce what the element actually shows: every background layer composited over the colour
+   * behind it, so the mesh keeps the same shades. Points follow the edited gradient's shape (along its line, on rings,
+   * around its sweep); a stack of several layers is sampled on a grid instead.
+   */
   const meshSeed = (): GradientPoint[] | null => {
     if (!model || !target) return null;
     const m = model;
-    const r = target.el.getBoundingClientRect();
+    const t = target;
+    const r = t.el.getBoundingClientRect();
     const w = r.width || 1;
     const ht = r.height || 1;
-    const bg = backdrop(target.el);
-    const colored = m.stops.map((s, i) => ({ s, i })).filter((x) => x.s.color);
-    const pct = stopPercents(colored.map((x) => x.s));
-    let stops = colored.map((x, k) => {
-      const [cr, cg, cb, a] = resolvedColor(x.i);
-      return { t: clamp(pct[k]! / 100, 0, 1), color: hex([cr, cg, cb].map((v, j) => Math.round(v * a + bg[j]! * (1 - a)))) };
+    const bg = backdrop(t.el);
+    // All layers, top first; the edited one uses the live model.
+    const layers = findGradients(t.computed).map((g, i) => {
+      if (i === t.layer) return { m, colors: m.stops.map((_, k) => resolvedColor(k)).filter((_, k) => m.stops[k]!.color) as Rgba[] };
+      const lm = toModel(g.text);
+      return lm ? { m: lm, colors: lm.stops.filter((st) => st.color).map((st) => toRgba(st.color) ?? ([0, 0, 0, 0] as Rgba)) } : null;
     });
-    if (m.fn === 'conic' && stops.length > 2 && stops.at(-1)!.t > 0.99) stops = stops.slice(0, -1);
-    const perStop = m.fn === 'linear' ? 2 : m.fn === 'radial' ? 3 : 1;
-    const most = Math.max(2, Math.floor(MAX_POINTS / perStop));
-    if (stops.length > most) stops = Array.from({ length: most }, (_, k) => stops[Math.round((k * (stops.length - 1)) / (most - 1))]!);
-    const pts: GradientPoint[] = [];
-    const push = (px: number, py: number, color: string) =>
-      pts.push({ x: Math.round(clamp(px / w, 0, 1) * 1000) / 1000, y: Math.round(clamp(py / ht, 0, 1) * 1000) / 1000, color });
-    const cx = ((m.cfg.x ?? 50) / 100) * w;
-    const cy = ((m.cfg.y ?? 50) / 100) * ht;
-    if (m.fn === 'linear') {
-      const { angle } = geometry();
-      const a = (angle * Math.PI) / 180;
-      const [dx, dy] = [Math.sin(a), -Math.cos(a)];
-      const len = Math.abs(w * dx) + Math.abs(ht * dy);
-      const across = (Math.abs(w * dy) + Math.abs(ht * dx)) * 0.28;
-      for (const st of stops) {
-        const bx = w / 2 + (st.t - 0.5) * len * dx;
-        const by = ht / 2 + (st.t - 0.5) * len * dy;
-        for (const o of [-1, 1]) push(bx - dy * across * o, by + dx * across * o, st.color);
+    const colorAt = (rx: number, ry: number) => {
+      let out: [number, number, number] = [...bg];
+      for (const l of [...layers].reverse()) {
+        if (!l || !l.colors.length) continue;
+        const c = layerColorAt(l.m, l.colors, rx * w, ry * ht, w, ht);
+        out = out.map((v, j) => c[j]! * c[3] + v * (1 - c[3])) as [number, number, number];
       }
-    } else if (m.fn === 'radial') {
-      const reach = Math.max(Math.hypot(cx, cy), Math.hypot(w - cx, cy), Math.hypot(cx, ht - cy), Math.hypot(w - cx, ht - cy));
-      stops.forEach((st, k) => {
-        if (st.t < 0.08) return push(cx, cy, st.color);
-        for (let j = 0; j < 3; j++) {
-          const ang = (j / 3) * Math.PI * 2 + k * 0.9;
-          push(cx + Math.cos(ang) * st.t * reach, cy + Math.sin(ang) * st.t * reach, st.color);
-        }
-      });
+      return hex(out.map((v) => Math.round(clamp(v, 0, 255))));
+    };
+
+    const spots: Array<[number, number]> = [];
+    const at = (px: number, py: number) => spots.push([clamp(px / w, 0, 1), clamp(py / ht, 0, 1)]);
+    if (layers.length > 1) {
+      for (const y of [0.15, 0.5, 0.85]) for (const x of [0.1, 0.37, 0.63, 0.9]) spots.push([x, y]);
     } else {
-      const radius = Math.min(w, ht) * 0.38;
-      for (const st of stops) {
-        const a = ((m.cfg.angle + st.t * 360) * Math.PI) / 180;
-        push(cx + Math.sin(a) * radius, cy - Math.cos(a) * radius, st.color);
+      const colored = m.stops.filter((st) => st.color);
+      let ts = stopPercents(colored).map((v) => clamp(v / 100, 0, 1));
+      if (m.fn === 'conic' && ts.length > 2 && ts.at(-1)! > 0.99) ts = ts.slice(0, -1);
+      const perStop = m.fn === 'linear' ? 2 : m.fn === 'radial' ? 3 : 1;
+      const most = Math.max(2, Math.floor(MAX_POINTS / perStop));
+      if (ts.length > most) ts = Array.from({ length: most }, (_, k) => ts[Math.round((k * (ts.length - 1)) / (most - 1))]!);
+      const cx = ((m.cfg.x ?? 50) / 100) * w;
+      const cy = ((m.cfg.y ?? 50) / 100) * ht;
+      if (m.fn === 'linear') {
+        const { angle } = geometry();
+        const a = (angle * Math.PI) / 180;
+        const [dx, dy] = [Math.sin(a), -Math.cos(a)];
+        const len = Math.abs(w * dx) + Math.abs(ht * dy);
+        const across = (Math.abs(w * dy) + Math.abs(ht * dx)) * 0.28;
+        for (const st of ts) {
+          const bx = w / 2 + (st - 0.5) * len * dx;
+          const by = ht / 2 + (st - 0.5) * len * dy;
+          for (const o of [-1, 1]) at(bx - dy * across * o, by + dx * across * o);
+        }
+      } else if (m.fn === 'radial') {
+        const [rx, ry] = radii(m, w, ht, cx, cy);
+        ts.forEach((st, k) => {
+          if (st < 0.08) return at(cx, cy);
+          for (let j = 0; j < 3; j++) {
+            const ang = (j / 3) * Math.PI * 2 + k * 0.9;
+            at(cx + Math.cos(ang) * st * rx, cy + Math.sin(ang) * st * ry);
+          }
+        });
+      } else {
+        const radius = Math.min(w, ht) * 0.38;
+        for (const st of ts) {
+          const a = ((m.cfg.angle + st * 360) * Math.PI) / 180;
+          at(cx + Math.sin(a) * radius, cy - Math.cos(a) * radius);
+        }
       }
     }
-    return pts.length >= 2 ? pts.slice(0, MAX_POINTS) : null;
+    // Pin the corners to their real colour too, so a blob doesn't tint areas the CSS leaves plain.
+    for (const c of [[0, 0], [1, 0], [0, 1], [1, 1]] as Array<[number, number]>) {
+      if (spots.length >= MAX_POINTS) break;
+      if (spots.every(([x, y]) => Math.hypot(x - c[0], y - c[1]) > 0.2)) spots.push(c);
+    }
+    const pts = spots.slice(0, MAX_POINTS).map(([x, y]) => ({ x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000, color: colorAt(x, y) }));
+    return pts.length >= 2 ? pts : null;
   };
 
   // ---------- lifecycle ----------
@@ -1118,6 +1214,9 @@ export function createCssEditor(ctx: CssEditorContext) {
     flush: () => save(),
     meshSeed,
     /** Where the gradient is written, if found (used to locate an inline-styled element's tag). */
+    get pseudo() {
+      return target?.pseudo.replace('::', '') as '' | 'before' | 'after' | undefined;
+    },
     get sourceMatch() {
       return source && source.quality === 'exact' ? { file: source.file, start: source.start } : null;
     },

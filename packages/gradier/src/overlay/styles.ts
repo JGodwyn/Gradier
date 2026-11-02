@@ -38,24 +38,25 @@ button { cursor: pointer; }
   background: conic-gradient(from 200deg, #f472b6, #8b5cf6, #22d3ee, #a3e635, #f472b6); }
 .launcher .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); }
 
+/* A floating window at the top right (or left), as tall as its content up to the viewport. */
 .panel {
-  position: fixed; top: 0; right: 0; bottom: 0; z-index: 2;
-  width: 312px;
-  display: flex; flex-direction: column;
-  background: var(--bg); border-left: 1px solid var(--line);
-  box-shadow: -12px 0 40px rgba(0,0,0,.3);
+  position: fixed; top: 12px; right: 12px; z-index: 2;
+  width: min(312px, calc(100vw - 24px)); max-height: calc(100vh - 24px);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg); border: 1px solid var(--line-strong); border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(0,0,0,.45), 0 2px 8px rgba(0,0,0,.25);
 }
 /* The panel grows out of the launcher pill and shrinks back into it (Web Animations, see morph() in index.ts). */
 .launcher { transform-origin: 100% 100%; transition: transform 200ms var(--ease-out), opacity 200ms var(--ease-out), background-color 150ms ease; }
 .launcher.from { opacity: 0; transform: scale(0.95); }
 .launcher:active { transform: scale(0.97); }
 .toolbar.from { opacity: 0; transform: translate(-50%, 12px) scale(0.97); }
-.panel.left { right: auto; left: 0; border-left: 0; border-right: 1px solid var(--line); box-shadow: 12px 0 40px rgba(0,0,0,.3); }
-.head { display: flex; align-items: center; gap: 4px; height: 56px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--line); user-select: none; flex: none; }
+.panel.left { right: auto; left: 12px; }
+.head { display: flex; align-items: center; gap: 4px; height: 52px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--line); user-select: none; flex: none; }
 .head .logo { width: 16px; height: 16px; margin-right: 4px; }
 .head .title { font-weight: 650; flex: 1; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .head-sep { width: 1px; height: 18px; margin: 0 4px; background: var(--line-strong); }
-.body { overflow-y: auto; padding: 4px 16px 20px; display: flex; flex-direction: column; flex: 1; scrollbar-width: thin; scrollbar-color: #444 transparent; }
+.body { overflow-y: auto; padding: 4px 16px 20px; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; scrollbar-width: thin; scrollbar-color: #444 transparent; }
 .foot { border-top: 1px solid var(--line); padding: 10px 16px; display: flex; align-items: center; gap: 8px; flex: none; }
 .foot .status { flex: 1; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .foot .status.dirty { color: var(--warn); }
@@ -65,7 +66,8 @@ button { cursor: pointer; }
 /* Collapsible blocks: height/opacity are animated from JS (measured), the end state lives here. */
 .sbody, .pwrap { overflow: hidden; }
 .sbody.shut, .pwrap.shut { height: 0; opacity: 0; }
-.sinner { display: flex; flex-direction: column; gap: 10px; padding: 10px 4px 4px; margin: 0 -4px; }
+.sbody { margin: 0 -6px; }
+.sinner { display: flex; flex-direction: column; gap: 10px; padding: 10px 6px 6px; }
 .label .act { display: flex; transition: opacity 150ms ease; }
 .section.closed:not(.compact) .label .act:not(.keep) { opacity: 0; pointer-events: none; }
 .label { display: flex; align-items: center; gap: 6px; min-height: 24px; color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .09em; font-weight: 600; }

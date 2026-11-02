@@ -32,7 +32,31 @@ export default function gradier(options: GradierPluginOptions = {}): Plugin {
       file = resolveGradientsFile({ ...options, root });
     },
     configureServer(server) {
-      server.middlewares.use(createGradierMiddleware({ ...options, root }));
+      // HTML that Gradier edits (a data-gradier attribute, an inline-style gradient) is already applied on the page,
+      // so drop the full page reload Vite would send for it: you keep your place and selection.
+      const quiet = new Map<string, number>();
+      const onWrite = (written: string, kind: 'gradients' | 'css' | 'markup') => {
+        if (/\.html?$/i.test(written) && (kind === 'markup' || kind === 'css')) quiet.set(path.resolve(written), Date.now() + 3000);
+      };
+      const viteRoot = server.config.root;
+      const isQuiet = (payload: unknown) => {
+        const p = payload as { type?: string; path?: string; triggeredBy?: string };
+        if (p?.type !== 'full-reload') return false;
+        const now = Date.now();
+        for (const [f, until] of quiet) if (until < now) quiet.delete(f);
+        const target = p.triggeredBy ?? (p.path && p.path !== '*' ? path.resolve(viteRoot, p.path.replace(/^\//, '')) : '');
+        return !!target && quiet.has(path.resolve(target));
+      };
+      const channels = [(server as { environments?: Record<string, { hot?: { send: (...a: unknown[]) => void } }> }).environments?.client?.hot, server.ws];
+      for (const ch of new Set(channels)) {
+        if (!ch) continue;
+        const send = ch.send.bind(ch) as (...a: unknown[]) => void;
+        ch.send = ((...args: unknown[]) => {
+          if (isQuiet(args[0])) return;
+          send(...args);
+        }) as typeof ch.send;
+      }
+      server.middlewares.use(createGradierMiddleware({ ...options, root, onWrite, quietHtml: true }));
     },
     transformIndexHtml() {
       return [{ tag: 'script', attrs: { src: OVERLAY_SRC, defer: true }, injectTo: 'body' }];
