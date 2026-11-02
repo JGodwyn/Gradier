@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Edit mesh gradients live on your site during development and save them straight to your codebase.",
   "license": "MIT",
+  "author": "GodwinJohn",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/JGodwyn/Gradier.git",
