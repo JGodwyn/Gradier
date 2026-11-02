@@ -77,6 +77,15 @@ const ALL_SLIDERS = [...BLEND_SLIDERS, ...GRAIN_SLIDERS, ...FILTER_SLIDERS];
 const script = document.currentScript as HTMLScriptElement | null;
 const BASE = (script?.src ? new URL('.', script.src) : new URL('/__gradier/', location.href)).toString();
 const API = `${BASE}api`;
+const LIBRARY_API = `${BASE}library`;
+/** How long after the last edit mesh gradients are written to the file. */
+const SAVE_DELAY = 500;
+
+interface LibraryItem {
+  id: string;
+  gradient: Gradient;
+  savedAt: number;
+}
 
 const canon = (g: Gradient) => JSON.stringify(normalizeGradient(g));
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
@@ -113,10 +122,15 @@ function boot() {
     mode: 'mesh' as 'mesh' | 'css',
     tool: 'select' as Tool,
     handlesHidden: false,
+    expanded: false,
     exportScale: clamp(Number(storage('gradier:exportScale')) || 2, 1, 4),
   };
   let cancelPick: (() => void) | null = null;
   const history = new Map<string, { undo: string[]; redo: string[]; key?: string; at: number }>();
+  /** Gradients edited in this session. Only these are auto-saved, so gradients the page registers itself stay put. */
+  const touched = new Set<string>();
+  let library: LibraryItem[] = [];
+  let libraryRemote = false;
 
   // ---------- DOM scaffolding ----------
   const host = h('div', { id: 'gradier-overlay' });
@@ -146,7 +160,6 @@ function boot() {
     exportW?: HTMLElement;
     exportH?: HTMLElement;
     status?: HTMLElement;
-    save?: HTMLButtonElement;
     undo?: HTMLButtonElement;
     redo?: HTMLButtonElement;
   } = { rows: [], swatches: [], hexes: [], coords: [], sliders: new Map(), segs: new Map() };
@@ -196,6 +209,7 @@ function boot() {
   const pick = () => {
     if (cancelPick) return;
     if (!state.open) setOpen(true);
+    state.expanded = false;
     cancelPick = startPicker(stage, host, (result) => {
       cancelPick = null;
       if (!result) return render();
@@ -213,15 +227,14 @@ function boot() {
     render();
   };
 
-  const isDirty = () => changes().count > 0 || css.dirty;
-
+  /** `<gradier-gradient>` elements on the page (not the expanded view's own copy, which lives in our shadow root). */
   const namedElements = () =>
-    [...mountedElements()].filter((el) => el.isConnected && el.getAttribute('name')) as HTMLElement[];
+    [...mountedElements()].filter((el) => el.isConnected && el.getAttribute('name') && !shadow.contains(el)) as HTMLElement[];
 
   const changes = () => {
     const current = getGradients();
-    const changed = Object.keys(current).filter((n) => canon(current[n]!) !== state.saved[n]);
-    const deleted = Object.keys(state.saved).filter((n) => !(n in current));
+    const changed = Object.keys(current).filter((n) => touched.has(n) && canon(current[n]!) !== state.saved[n]);
+    const deleted = Object.keys(state.saved).filter((n) => touched.has(n) && !(n in current));
     return { changed, deleted, count: changed.length + deleted.length };
   };
 
@@ -258,6 +271,7 @@ function boot() {
     entry.redo = [];
     entry.key = key;
     entry.at = now;
+    touched.add(name);
     setGradient(name, next);
   };
 
@@ -272,6 +286,7 @@ function boot() {
     entry.key = undefined;
     const g = normalizeGradient(JSON.parse(snapshot));
     if (state.point !== null && state.point >= g.points.length) state.point = null;
+    touched.add(name);
     setGradient(name, g);
   };
 
@@ -293,18 +308,31 @@ function boot() {
     }
     state.loaded = true;
     render();
+    scheduleSave();
   };
 
-  const save = async () => {
+  // Edits are written to the gradients file automatically, shortly after you stop changing things.
+  let saveTimer = 0;
+  let saveAgain = false;
+  let saveFailed = false;
+  const scheduleSave = () => {
+    clearTimeout(saveTimer);
+    if (!state.loaded || !state.connected || !changes().count) return;
+    saveTimer = window.setTimeout(() => void save(), SAVE_DELAY);
+  };
+
+  const save = async (keepalive = false) => {
+    clearTimeout(saveTimer);
     const { changed, deleted, count } = changes();
-    if (!count || state.saving) return;
-    if (!state.connected) return toast('Save server not reachable', true);
+    if (!count || !state.connected) return;
+    if (state.saving) return void (saveAgain = true);
     state.saving = true;
-    render();
+    patch(state.selected ? getGradient(state.selected) : undefined);
     try {
       const current = getGradients();
       const res = await fetch(API, {
         method: 'POST',
+        keepalive,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ save: Object.fromEntries(changed.map((n) => [n, current[n]])), delete: deleted }),
       });
@@ -312,13 +340,67 @@ function boot() {
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
       state.file = data.file;
       state.saved = Object.fromEntries(Object.entries(data.gradients).map(([n, g]) => [n, canon(g)]));
-      toast(`Saved to ${data.file}`);
+      saveFailed = false;
     } catch (err) {
-      toast(`Save failed: ${err instanceof Error ? err.message : err}`, true);
+      // Don't retry in a loop; the next edit (or Ctrl/⌘+S) tries again.
+      if (!saveFailed) toast(`Couldn't save: ${err instanceof Error ? err.message : err}`, true);
+      saveFailed = true;
     } finally {
       state.saving = false;
+      if (saveAgain) {
+        saveAgain = false;
+        scheduleSave();
+      }
       render();
     }
+  };
+
+  // ---------- saved gradients (your library, shared across projects) ----------
+  const loadLibrary = async () => {
+    try {
+      const res = await fetch(LIBRARY_API, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`${res.status}`);
+      const data = (await res.json()) as { items: LibraryItem[] };
+      library = data.items.map((i) => ({ ...i, gradient: normalizeGradient(i.gradient) }));
+      libraryRemote = true;
+    } catch {
+      // Older or unreachable server: keep the library in this browser instead.
+      try {
+        const items = JSON.parse(storage('gradier:library') ?? '[]') as LibraryItem[];
+        library = items.map((i) => ({ ...i, gradient: normalizeGradient(i.gradient) }));
+      } catch {
+        library = [];
+      }
+    }
+    render();
+  };
+
+  const persistLibrary = async () => {
+    storage('gradier:library', JSON.stringify(library));
+    if (!libraryRemote) return;
+    try {
+      const res = await fetch(LIBRARY_API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: library }) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      toast(`Couldn't update saved gradients: ${err instanceof Error ? err.message : err}`, true);
+    }
+  };
+
+  const saveToLibrary = () => {
+    const g = state.selected ? getGradient(state.selected) : undefined;
+    if (!g) return;
+    const key = canon(g);
+    if (library.some((i) => canon(i.gradient) === key)) return toast('Already in your saved gradients');
+    library.unshift({ id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, gradient: structuredClone(g), savedAt: Date.now() });
+    void persistLibrary();
+    toast('Gradient saved');
+    render();
+  };
+
+  const removeFromLibrary = (id: string) => {
+    library = library.filter((i) => i.id !== id);
+    void persistLibrary();
+    render();
   };
 
   // ---------- gradient management ----------
@@ -330,6 +412,7 @@ function boot() {
     if (!name) return;
     if (!isValidName(name)) return toast('Use letters, numbers, - and _ only', true);
     if (names.includes(name)) return toast(`"${name}" already exists`, true);
+    touched.add(name);
     setGradient(name, randomGradient());
     state.selected = name;
     state.target = namedElements().find((el) => el.getAttribute('name') === name) ?? null;
@@ -345,6 +428,7 @@ function boot() {
     if (!to || to === from) return;
     if (!isValidName(to)) return toast('Use letters, numbers, - and _ only', true);
     if (getGradient(to)) return toast(`"${to}" already exists`, true);
+    touched.add(from).add(to);
     setGradient(to, g);
     namedElements()
       .filter((el) => el.getAttribute('name') === from)
@@ -358,7 +442,8 @@ function boot() {
 
   const remove = () => {
     const name = state.selected;
-    if (!name || !window.confirm(`Delete gradient "${name}"? It is removed from the file when you save.`)) return;
+    if (!name || !window.confirm(`Delete gradient "${name}"? It's also removed from ${state.file || 'your gradients file'}.`)) return;
+    touched.add(name);
     removeGradient(name);
     state.selected = null;
     ensureSelection();
@@ -452,7 +537,7 @@ function boot() {
   const section = (
     id: string,
     title: string,
-    opts: { collapsible?: boolean; open?: boolean; actions?: Node[]; compact?: boolean },
+    opts: { collapsible?: boolean; open?: boolean; actions?: Node[]; compact?: boolean; keepActions?: boolean },
     ...children: Array<Node | null | false>
   ) => {
     const open = !opts.collapsible || sectionOpen(id, opts.open ?? true);
@@ -462,7 +547,7 @@ function boot() {
       'div',
       { className: `label${opts.collapsible ? ' toggle' : ''}` },
       h('span', { className: 'grow' }, title),
-      ...(opts.actions ?? []).map((a) => h('span', { className: 'act' }, a)),
+      ...(opts.actions ?? []).map((a) => h('span', { className: `act${opts.keepActions ? ' keep' : ''}` }, a)),
       opts.collapsible ? chevron : null,
     );
     const body = h('div', { className: 'sbody' }, h('div', { className: 'sinner' }, ...children));
@@ -630,7 +715,8 @@ function boot() {
 
   const MAX_EXPORT = 8192;
   const exportSize = () => {
-    const r = state.target?.getBoundingClientRect();
+    const el = state.expanded ? namedElements().find((x) => x.getAttribute('name') === state.selected) : state.target;
+    const r = el?.getBoundingClientRect();
     const baseW = r && r.width ? r.width : 1200;
     const baseH = r && r.height ? r.height : 800;
     const s = Math.min(state.exportScale, MAX_EXPORT / Math.max(baseW, baseH));
@@ -659,6 +745,14 @@ function boot() {
       state.mode === 'mesh' ? refs.redo : null,
       state.mode === 'mesh' ? sep() : null,
       button(`icon ghost${cancelPick ? ' on' : ''}`, ICONS.pick, 'Pick any gradient on the page (Alt+P)', pick),
+      canExpand(g)
+        ? button(
+            `icon ghost${state.expanded ? ' on' : ''}`,
+            state.expanded ? ICONS.collapse : ICONS.expand,
+            state.expanded ? 'Back to the page (F)' : 'Expand to edit at full size (F)',
+            () => setExpanded(!state.expanded, true),
+          )
+        : null,
       button('icon ghost', ICONS.dock, 'Move panel to other side', () => {
         state.dock = state.dock === 'right' ? 'left' : 'right';
         storage('gradier:dock', state.dock);
@@ -715,6 +809,28 @@ function boot() {
         ),
       );
     } else {
+      // Saved gradients
+      const saved = h('div', { className: 'presets' });
+      for (const item of library) {
+        const apply = h('button', { className: 'preset', type: 'button', title: 'Apply this saved gradient', onclick: () => update(() => structuredClone(item.gradient)) });
+        apply.style.background = gradientToCSS(item.gradient);
+        const del = button('remove', ICONS.close, 'Remove from saved gradients', () => removeFromLibrary(item.id));
+        saved.append(h('div', { className: 'saved' }, apply, del));
+      }
+      body.append(
+        section(
+          'library',
+          `Saved  ${library.length}`,
+          {
+            collapsible: true,
+            open: false,
+            keepActions: true,
+            actions: [h('button', { className: 'btn small', type: 'button', title: 'Save this gradient to reuse it in any project', onclick: saveToLibrary }, '+ Save')],
+          },
+          library.length ? saved : h('div', { className: 'hint' }, 'Gradients you save show up here, in every project. Click one to apply it.'),
+        ),
+      );
+
       // Points
       const list = h('div', { className: 'points' });
       g.points.forEach((p, i) => {
@@ -875,8 +991,7 @@ function boot() {
     }
 
     refs.status = h('span', { className: 'status' });
-    refs.save = h('button', { className: 'btn action', type: 'button', title: `Save (${MOD}S)`, onclick: save }, 'Save');
-    const foot = h('div', { className: 'foot' }, refs.status, refs.save);
+    const foot = h('div', { className: 'foot' }, refs.status);
 
     return h('div', { className: panelClass }, head, body, foot);
   };
@@ -916,17 +1031,19 @@ function boot() {
     }
     const { count } = changes();
     if (refs.status) {
-      refs.status.className = `status${count ? ' dirty' : ''}`;
-      refs.status.textContent = state.saving
-        ? 'Saving…'
-        : count
-          ? `${count} unsaved change${count > 1 ? 's' : ''}`
-          : state.connected
-            ? `Saved · ${state.file}`
-            : 'Not connected';
+      const warn = !state.connected || (saveFailed && count > 0);
+      refs.status.className = `status${warn ? ' dirty' : ''}`;
+      refs.status.textContent = !state.loaded
+        ? 'Connecting…'
+        : !state.connected
+          ? 'Not connected · changes stay on this page'
+          : state.saving || (count && !saveFailed)
+            ? 'Saving…'
+            : count
+              ? `Not saved · ${MOD}S to retry`
+              : `Saved · ${state.file}`;
       refs.status.title = state.file;
     }
-    if (refs.save) refs.save.disabled = !count || state.saving || !state.connected;
     const entry = state.selected ? history.get(state.selected) : undefined;
     if (refs.undo) refs.undo.disabled = !entry?.undo.length;
     if (refs.redo) refs.redo.disabled = !entry?.redo.length;
@@ -948,10 +1065,12 @@ function boot() {
     // Reduced motion still animates: the CSS swaps movement for a plain fade.
     const animate = animateNext;
     animateNext = false;
-    const count = changes().count + (css.dirty ? 1 : 0);
+    const count = changes().count;
     if (!state.open) {
       cancelPick?.();
       cancelPick = null;
+      state.expanded = false;
+      syncExpand(undefined, animate);
       css.clearStage();
       if (panel) animate ? leave(panel) : panel.remove();
       panel = null;
@@ -981,6 +1100,8 @@ function boot() {
       state.selected,
       state.point,
       state.dock,
+      state.expanded,
+      library.map((i) => i.id).join(','),
       state.connected,
       state.loaded,
       g?.points.length,
@@ -1006,8 +1127,91 @@ function boot() {
       } else toolbar.el.classList.remove('from');
       toolbar.patch({ tool: state.tool, handlesHidden: state.handlesHidden });
     } else toolbar.el.remove();
+    syncExpand(g, animate);
     if (state.mode === 'css') css.patch();
     else patch(g);
+  };
+
+  // ---------- expanded view ----------
+  // Shows the selected gradient large in the middle of the screen so it can be edited without being limited by its size
+  // on the page. It keeps the element's aspect ratio, so what you see matches the real thing.
+  let expandLayer: HTMLElement | null = null;
+  let expandBox: HTMLElement | null = null;
+  let expandKind: 'mesh' | 'css' | null = null;
+  let expandAspect = 16 / 10;
+
+  const canExpand = (g: Gradient | undefined) => !cancelPick && (state.mode === 'css' ? css.active : !!g);
+
+  const setExpanded = (on: boolean, animate = false) => {
+    animateNext = animate;
+    state.expanded = on;
+    render();
+  };
+
+  const syncExpand = (g: Gradient | undefined, animate: boolean) => {
+    if (state.expanded && !(state.open && canExpand(g))) state.expanded = false;
+    const kind = state.expanded ? state.mode : null;
+    if (expandLayer && kind !== expandKind) {
+      const old = expandLayer;
+      animate && !kind ? leave(old) : old.remove();
+      expandLayer = expandBox = null;
+      css.setExpandEl(null);
+    }
+    expandKind = kind;
+    if (!kind) return;
+    if (!expandLayer) {
+      const source = kind === 'css' ? css.targetEl : namedElements().find((el) => el.getAttribute('name') === state.selected);
+      const r = source?.getBoundingClientRect();
+      expandAspect = r && r.width > 0 && r.height > 0 ? clamp(r.width / r.height, 0.2, 5) : 16 / 10;
+      expandBox = kind === 'css' ? h('div', {}) : (document.createElement('gradier-gradient') as HTMLElement);
+      expandBox.className = 'expand-box';
+      if (kind === 'mesh') {
+        // Same gestures as on the page: click empty space to deselect, double-click to add a node.
+        expandBox.addEventListener('pointerdown', (e) => {
+          if (e.target === expandBox && state.point !== null) {
+            state.point = null;
+            render();
+          }
+        });
+        expandBox.addEventListener('dblclick', (e) => {
+          const el = expandBox!;
+          const rect = el.getBoundingClientRect();
+          const at = { x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height };
+          addPoint(at.x, at.y, sampleColor(el, at) ?? undefined);
+        });
+      }
+      const backdrop = h('div', { className: 'backdrop', title: 'Click to go back to the page', onclick: () => setExpanded(false, true) });
+      expandLayer = h('div', { className: 'expand' }, backdrop, expandBox);
+      root.insertBefore(expandLayer, stage);
+      if (kind === 'css') css.setExpandEl(expandBox);
+      layoutExpand();
+      if (animate) enter(expandLayer);
+    }
+    if (kind === 'mesh' && state.selected && expandBox!.getAttribute('name') !== state.selected) expandBox!.setAttribute('name', state.selected);
+  };
+
+  /** Fit the expanded box into the space beside the panel and above the toolbar. */
+  const layoutExpand = () => {
+    if (!expandBox) return;
+    const panelW = panel?.offsetWidth ?? 0;
+    const margin = innerWidth < 700 ? 16 : 48;
+    const top = 56;
+    const bottom = 96;
+    const availW = Math.max(innerWidth - panelW - margin * 2, 120);
+    const availH = Math.max(innerHeight - top - bottom, 120);
+    let w = availW;
+    let height = w / expandAspect;
+    if (height > availH) {
+      height = availH;
+      w = height * expandAspect;
+    }
+    const left = (state.dock === 'left' ? panelW : 0) + margin + (availW - w) / 2;
+    Object.assign(expandBox.style, {
+      left: `${Math.round(left)}px`,
+      top: `${Math.round(top + (availH - height) / 2)}px`,
+      width: `${Math.round(w)}px`,
+      height: `${Math.round(height)}px`,
+    });
   };
 
   let frame = 0;
@@ -1384,6 +1588,7 @@ function boot() {
 
   const positionStage = () => {
     if (!state.open) return;
+    layoutExpand();
     if (state.mode === 'css') {
       for (const o of overlays.values()) o.frame.remove(), o.chip.remove();
       overlays.clear();
@@ -1392,9 +1597,10 @@ function boot() {
       return;
     }
     css.clearStage();
-    const els = namedElements();
+    // While expanded, the handles live on the big copy and the page's own frames are hidden.
+    const els = state.expanded && expandBox ? [expandBox] : namedElements();
     const selected = state.selected;
-    if (!state.target?.isConnected || state.target.getAttribute('name') !== selected) {
+    if (!state.target?.isConnected || !els.includes(state.target) || state.target.getAttribute('name') !== selected) {
       state.target = els.find((el) => el.getAttribute('name') === selected) ?? null;
     }
     const seen = new Set<HTMLElement>();
@@ -1402,6 +1608,7 @@ function boot() {
       const r = el.getBoundingClientRect();
       if (r.width === 0 || r.height === 0 || r.bottom < 0 || r.top > innerHeight) continue;
       seen.add(el);
+      if (el === expandBox) continue;
       let o = overlays.get(el);
       if (!o) {
         const chip = h('button', { className: 'chip', type: 'button' });
@@ -1506,10 +1713,21 @@ function boot() {
       if (!state.open || cancelPick) return;
       const target = e.composedPath()[0];
       const mod = isMac ? e.metaKey : e.ctrlKey;
+      if (!mod && !e.altKey && e.key.toLowerCase() === 'f' && !isTextField(target)) {
+        const g = state.selected ? getGradient(state.selected) : undefined;
+        if (state.expanded || canExpand(g)) {
+          e.preventDefault();
+          return setExpanded(!state.expanded);
+        }
+      }
+      if (e.key === 'Escape' && state.expanded && !isTextField(target)) {
+        e.preventDefault();
+        return setExpanded(false);
+      }
       if (state.mode === 'css') {
         if (mod && e.key.toLowerCase() === 's') {
           e.preventDefault();
-          void css.save();
+          css.flush();
         } else if (mod && (e.key.toLowerCase() === 'z' || e.key.toLowerCase() === 'y') && !isTextField(target)) {
           e.preventDefault();
           css.undo(e.shiftKey || e.key.toLowerCase() === 'y');
@@ -1547,14 +1765,20 @@ function boot() {
     true,
   );
 
-  window.addEventListener('beforeunload', (e) => {
-    if (isDirty()) e.preventDefault();
+  // Leaving the page: write anything still waiting for its save delay.
+  window.addEventListener('pagehide', () => {
+    if (changes().count) void save(true);
+    css.flush();
   });
 
-  subscribe(scheduleRender);
+  subscribe(() => {
+    scheduleRender();
+    scheduleSave();
+  });
   render();
   requestAnimationFrame(loop);
   void load();
+  void loadLibrary();
 }
 
 /** Keep the user's blend settings when randomising colours/positions. */

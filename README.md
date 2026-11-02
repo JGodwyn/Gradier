@@ -2,7 +2,7 @@
 
 Point at **any gradient on your running site**, edit it visually, and save the change straight back into your source code. The editor only runs in development and never ships to production.
 
-**Edit existing CSS gradients.** Press <kbd>Alt</kbd>+<kbd>P</kbd> and click any gradient on the page: `linear-`, `radial-`, `conic-` or `repeating-*`, on an element or its `::before`/`::after`, in any layer of a multi-layer background. Drag its colour stops, change colours, angle and type, and watch the page update live. Hit **Save** (<kbd>⌘/Ctrl</kbd>+<kbd>S</kbd>) and Gradier finds where that gradient is written in your project, whether a CSS/SCSS/Less file, a CSS Module, a `<style>` block, an HTML `style=""`, a JSX `style={{…}}` or a template, and rewrites **just that gradient** in place. If it can't be traced to one string in source (Tailwind classes, values built at runtime), **Copy for AI agent** hands the change to your coding agent.
+**Edit existing CSS gradients.** Press <kbd>Alt</kbd>+<kbd>P</kbd> and click any gradient on the page: `linear-`, `radial-`, `conic-` or `repeating-*`, on an element or its `::before`/`::after`, in any layer of a multi-layer background. Drag its colour stops, change colours, angle and type, and watch the page update live. Your edits save automatically: Gradier finds where that gradient is written in your project, whether a CSS/SCSS/Less file, a CSS Module, a `<style>` block, an HTML `style=""`, a JSX `style={{…}}` or a template, and rewrites **just that gradient** in place. If it can't be traced to one string in source (Tailwind classes, values built at runtime), **Copy for AI agent** hands the change to your coding agent.
 
 **Design mesh gradients.** Drop `<gradier-gradient name="hero">` anywhere and press <kbd>Alt</kbd>+<kbd>G</kbd>. Shape it with colour nodes, lines, arcs and freehand strokes; tune softness, blend mode, grain and filters per node or for the whole gradient; export it as PNG or JPG; and save it to `src/gradients.json`. The mesh runtime is the one part that ships: about 11 kB gzipped, WebGL with a CSS fallback.
 
@@ -132,7 +132,8 @@ After picking a gradient, the panel shows its stops and settings, and the page u
 | Remove a stop | Select it and press **Delete**, or the bin icon |
 | Type | Linear, radial or conic |
 | Angle / centre | Drag the handles on the page (**Shift** snaps), or the sliders |
-| Save to source | **Save** or **⌘/Ctrl+S**. The **Source** row shows the file and line it writes to; if several places match, choose one or update all |
+| Save to source | Automatic: changes are written back shortly after you stop editing (HTML and server templates, which reload the page, are written when you move on to another gradient). **⌘/Ctrl+S** writes right away. The **Source** row shows the file and line; if several places match, choose one or update all |
+| Expand | **F** or the expand button in the header: edit the gradient large in the middle of the screen. **F**, **Esc** or a click outside goes back |
 | Can't save automatically | **Copy CSS**, or **Copy for AI agent** (an edit request for a coding agent) |
 
 ### Mesh gradients
@@ -176,11 +177,17 @@ Double-clicking the gradient also adds a node.
 
 **Selected node vs all nodes:** with a node selected, Softness, Blend mode and the Filter sliders change only that node (the section shows a "Node N" chip). With nothing selected they change every node ("All nodes").
 
-Sections collapse with their chevron. The header has undo/redo, the CSS-gradient picker, a button to move the panel to the other side, and close.
+Sections collapse with their chevron. The header has undo/redo, the CSS-gradient picker, expand, a button to move the panel to the other side, and close.
 
 #### Saving
 
-**Save** or **⌘/Ctrl+S** writes the gradients file (default `src/gradients.json`). **⌘/Ctrl+Z** / **⌘/Ctrl+Shift+Z** undo and redo. A dot on the pill marks unsaved changes, and the browser warns before leaving with unsaved edits.
+Edits are saved to the gradients file (default `src/gradients.json`) automatically, half a second after you stop changing things; the footer shows the status. **⌘/Ctrl+S** saves right away. **⌘/Ctrl+Z** / **⌘/Ctrl+Shift+Z** undo and redo.
+
+#### Saved gradients and the expanded view
+
+**Saved** (between Gradient and Points, collapsed by default) is your own library: **+ Save** keeps the current gradient, click a swatch to apply it, hover it to remove it. The library is stored in `~/.gradier/library.json`, so it follows you across projects.
+
+**F** or the expand button in the header shows the gradient large in the middle of the screen, at the element's aspect ratio, with all the handles and tools. **F**, **Esc** or a click outside returns to the page.
 
 ## Gradient format
 

@@ -215,6 +215,8 @@ export function createCssEditor(ctx: CssEditorContext) {
   let applyAll = false;
   let searching = false;
   let saving = false;
+  let saveError = false;
+  let saveTimer = 0;
   let selected: number | null = null;
   let idSeq = 0;
   const history = { undo: [] as string[], redo: [] as string[], key: undefined as string | undefined, at: 0 };
@@ -222,6 +224,8 @@ export function createCssEditor(ctx: CssEditorContext) {
   let refs: Record<string, HTMLElement | undefined> = {};
   let stopRefs: Array<{ row: HTMLElement; swatch: HTMLInputElement; text: HTMLInputElement; pos: HTMLInputElement }> = [];
   let markers: HTMLElement[] = [];
+  /** Box shown by the expanded view; when set, on-page handles are drawn on it instead of the element. */
+  let expandEl: HTMLElement | null = null;
 
   // ---------- preview ----------
   const previewSheet = () => {
@@ -272,6 +276,7 @@ export function createCssEditor(ctx: CssEditorContext) {
     const structural = draft.stops.length !== model.stops.length || draft.fn !== model.fn;
     model = draft;
     applyPreview();
+    scheduleSave();
     structural ? ctx.render() : patch();
   };
 
@@ -284,6 +289,7 @@ export function createCssEditor(ctx: CssEditorContext) {
     model = JSON.parse(snap) as Model;
     if (selected !== null && selected >= model.stops.length) selected = null;
     applyPreview();
+    scheduleSave();
     ctx.render();
   };
 
@@ -326,6 +332,7 @@ export function createCssEditor(ctx: CssEditorContext) {
       matches = found;
       source = found[0] ?? null;
       if (source && !isDirty()) rebase(source.text);
+      else if (source) scheduleSave();
     } catch (err) {
       if (target !== t) return;
       matches = [];
@@ -340,64 +347,104 @@ export function createCssEditor(ctx: CssEditorContext) {
     }
   };
 
-  const save = async () => {
-    if (!model || !target || saving || !isDirty()) return;
-    if (!source) {
-      ctx.toast("Couldn't find this gradient in your source. Use “Copy for AI agent”.", true);
-      return;
-    }
+  // Changes are written to source automatically: shortly after you stop editing, or right away when you leave the
+  // gradient. Files that make the dev server reload the whole page (HTML and server templates) only save on leave,
+  // so the page doesn't reload under you mid-edit.
+  const RELOADS_PAGE = /\.(html?|php|erb|liquid|njk|hbs|twig|ejs|pug|haml|slim|cshtml|razor|mdx?)$/i;
+  const SAVE_DELAY = 700;
+  const savesOnLeave = () => !!source && RELOADS_PAGE.test(source.file);
+
+  const scheduleSave = () => {
+    clearTimeout(saveTimer);
+    if (!source || savesOnLeave()) return;
+    saveTimer = window.setTimeout(() => save(), SAVE_DELAY);
+  };
+
+  /** Latest known source locations per edited gradient, so queued saves always target the current text. */
+  const latest = new Map<string, { src: SourceMatch; group: SourceMatch[] }>();
+  let queue: Promise<void> = Promise.resolve();
+  let pending = 0;
+  const keyOf = (t: Target) => `${t.id}|${t.layer}`;
+
+  /** Queue a write of the current gradient to source. Safe to call often; writes run one at a time. */
+  const save = () => {
+    clearTimeout(saveTimer);
+    if (!model || !target || !source || !isDirty()) return;
+    const t = target;
+    const key = keyOf(t);
     const replacement = serialize(model);
-    const group = applyAll ? matches.filter((m) => m.quality === 'exact' || m === source) : [source];
+    const snap = {
+      src: source,
+      group: applyAll ? matches.filter((m) => m.quality === 'exact' || m === source) : [source],
+    };
+    // Optimistic: the gradient counts as saved now; the status shows progress until the write lands.
+    baseline = replacement;
+    pending++;
     saving = true;
     patch();
-    try {
-      const res = await fetch(`${ctx.api}css/replace`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ edits: group.map((m) => ({ file: m.file, start: m.start, end: m.end, text: m.text, replacement })) }),
-      });
-      const data = (await res.json()) as { results?: Array<Omit<SourceMatch, 'quality' | 'selector' | 'hinted'>>; error?: string };
-      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-      const results = data.results ?? [];
-      const mine = results.find((r) => r.file === source!.file) ?? results[0];
-      if (mine) source = { ...source, ...mine, quality: 'exact' };
-      matches = [source, ...matches.filter((m) => !group.includes(m))];
-      baseline = replacement;
-      ctx.toast(`Saved to ${source.file}:${source.line}${results.length > 1 ? ` (+${results.length - 1} more)` : ''}`);
-      settlePreview(target);
-    } catch (err) {
-      ctx.toast(`Save failed: ${err instanceof Error ? err.message : err}`, true);
-    } finally {
-      saving = false;
-      ctx.render();
-    }
+    queue = queue.then(async () => {
+      const { src, group } = latest.get(key) ?? snap;
+      if (src.text === replacement) return;
+      try {
+        const res = await fetch(`${ctx.api}css/replace`, {
+          method: 'POST',
+          keepalive: true,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ edits: group.map((m) => ({ file: m.file, start: m.start, end: m.end, text: m.text, replacement })) }),
+        });
+        const data = (await res.json()) as { results?: Array<Omit<SourceMatch, 'quality' | 'selector' | 'hinted'>>; error?: string };
+        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+        // Pair each result with the match it came from (same file, nearest offset).
+        const left = [...group];
+        const updated = (data.results ?? []).map((r) => {
+          const same = left.filter((m) => m.file === r.file);
+          const from = same.reduce<SourceMatch | undefined>((a, b) => (!a || Math.abs(b.start - r.start) < Math.abs(a.start - r.start) ? b : a), undefined) ?? src;
+          left.splice(left.indexOf(from), 1);
+          return { orig: from, next: { ...from, ...r, quality: 'exact' as const } };
+        });
+        const primary = updated.find((u) => u.orig === src)?.next ?? updated[0]?.next ?? src;
+        const nextGroup = updated.map((u) => u.next);
+        latest.set(key, { src: primary, group: nextGroup.length ? nextGroup : [primary] });
+        saveError = false;
+        if (target === t) {
+          const replaced = new Set(updated.map((u) => u.orig));
+          matches = matches.map((m) => (replaced.has(m) ? updated.find((u) => u.orig === m)!.next : m));
+          if (source === src || replaced.has(source!)) source = primary;
+        }
+        settlePreview(t, replacement);
+      } catch (err) {
+        saveError = true;
+        if (target === t) baseline = '';
+        ctx.toast(`Couldn't save: ${err instanceof Error ? err.message : err}`, true);
+      }
+    }).finally(() => {
+      if (--pending === 0) saving = false;
+      if (target === t) ctx.render();
+    });
   };
 
   /** After a save, drop the preview override once the dev server's hot reload shows the same gradient. */
-  const settlePreview = (t: Target) => {
-    const expected = serialize(model!);
+  const settling = new Set<string>();
+  const settlePreview = (t: Target, expected: string) => {
     let tries = 0;
+    settling.add(t.id);
     const check = () => {
-      if (target === t && isDirty()) return;
+      // Still being edited, or a newer save is on its way: that one will settle it.
+      if (target === t && (isDirty() || serialize(model!) !== expected)) return void settling.delete(t.id);
       const css = previews.get(t.id);
       previews.delete(t.id);
       writePreviews();
       const now = findGradients(getComputedStyle(t.el, t.pseudo || null).backgroundImage)[t.layer]?.text ?? '';
       if (compareGradients(now, expected) === 'exact') {
         if (target === t) t.computed = getComputedStyle(t.el, t.pseudo || null).backgroundImage;
-        return;
+        return void settling.delete(t.id);
       }
       if (css) previews.set(t.id, css);
       writePreviews();
       if (++tries < 10) setTimeout(check, 500);
+      else settling.delete(t.id);
     };
     setTimeout(check, 400);
-  };
-
-  const revert = () => {
-    if (!model || !isDirty()) return;
-    update((m) => Object.assign(m, toModel(baseline)!));
-    ctx.render();
   };
 
   const agentPrompt = () => {
@@ -442,7 +489,6 @@ export function createCssEditor(ctx: CssEditorContext) {
             'select',
             {
               onchange: (e: Event) => {
-                if (isDirty() && !confirm('Discard unsaved changes to this layer?')) return ctx.render();
                 open({ el: t.el, pseudo: t.pseudo, computed: t.computed, layer: Number((e.target as HTMLSelectElement).value) });
               },
             },
@@ -694,9 +740,7 @@ export function createCssEditor(ctx: CssEditorContext) {
     refs.undo = ctx.button('icon ghost', ICONS.undo, 'Undo', () => undo());
     refs.redo = ctx.button('icon ghost', ICONS.redo, 'Redo', () => undo(true));
     refs.status = h('span', { className: 'status' });
-    refs.revert = btn('Revert', revert, 'ghost');
-    refs.save = h('button', { className: 'btn primary', type: 'button', title: 'Write to source (Ctrl/⌘+S)', onclick: () => void save() }, 'Save');
-    const foot = h('div', { className: 'foot' }, refs.undo, refs.redo, refs.status, refs.revert, refs.save);
+    const foot = h('div', { className: 'foot' }, refs.undo, refs.redo, refs.status);
     return { body, foot };
   };
 
@@ -747,12 +791,27 @@ export function createCssEditor(ctx: CssEditorContext) {
     if (refs.code) refs.code.textContent = serialize(m);
     const dirty = isDirty();
     if (refs.status) {
-      refs.status.className = `status${dirty ? ' dirty' : ''}`;
-      refs.status.textContent = saving ? 'Saving…' : dirty ? 'Unsaved' : source ? `In ${source.file}:${source.line}` : searching ? 'Searching…' : 'Not found in source';
-      refs.status.title = source ? `${source.file}:${source.line}` : '';
+      const where = source ? `${source.file}:${source.line}` : '';
+      const warn = saveError || (!source && !searching && dirty);
+      refs.status.className = `status${warn ? ' dirty' : ''}`;
+      refs.status.textContent = saving
+        ? 'Saving…'
+        : saveError
+          ? 'Not saved · edit again to retry'
+          : searching
+            ? 'Searching…'
+            : !source
+              ? dirty
+                ? 'Page only · not found in source'
+                : 'Not found in source'
+              : dirty
+                ? savesOnLeave()
+                  ? `Saves to ${where} when you're done`
+                  : 'Saving…'
+                : `Saved · ${where}`;
+      refs.status.title = where;
     }
-    if (refs.save) (refs.save as HTMLButtonElement).disabled = !dirty || saving || !source;
-    if (refs.revert) (refs.revert as HTMLButtonElement).disabled = !dirty;
+    if (expandEl) expandEl.style.background = serialize(m);
     if (refs.undo) (refs.undo as HTMLButtonElement).disabled = !history.undo.length;
     if (refs.redo) (refs.redo as HTMLButtonElement).disabled = !history.redo.length;
   };
@@ -832,11 +891,11 @@ export function createCssEditor(ctx: CssEditorContext) {
   stageEls.center.addEventListener('pointerdown', (e) => dragHandle(e, 'center'));
 
   const geometry = () => {
-    const r = target!.el.getBoundingClientRect();
+    const r = (expandEl ?? target!.el).getBoundingClientRect();
     const m = model!;
     const cx = m.fn === 'linear' ? r.left + r.width / 2 : r.left + ((m.cfg.x ?? 50) / 100) * r.width;
     const cy = m.fn === 'linear' ? r.top + r.height / 2 : r.top + ((m.cfg.y ?? 50) / 100) * r.height;
-    const radius = clamp(Math.min(r.width, r.height) / 2 - 12, 24, 70);
+    const radius = clamp(Math.min(r.width, r.height) / 2 - 12, 24, expandEl ? 120 : 70);
     let angle = m.cfg.angle;
     if (m.fn === 'linear' && m.cfg.corner) {
       const c = m.cfg.corner;
@@ -880,6 +939,7 @@ export function createCssEditor(ctx: CssEditorContext) {
     for (const el of Object.values(stageEls)) if (!el.isConnected) stage.append(el);
     Object.assign(stageEls.frame.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
     stageEls.chip.textContent = describe(target.el, target.pseudo);
+    stageEls.chip.style.display = stageEls.frame.style.display = expandEl ? 'none' : '';
     Object.assign(stageEls.chip.style, { left: `${r.left}px`, top: `${Math.max(r.top, 24)}px` });
     const showCenter = m.fn !== 'linear' && !m.cfg.positionRaw;
     const showRotor = m.fn !== 'radial';
@@ -899,7 +959,7 @@ export function createCssEditor(ctx: CssEditorContext) {
 
   // ---------- lifecycle ----------
   const open = (pick: { el: Element; pseudo: Pseudo; computed: string; layer?: number }) => {
-    if (target) dropPreview(target);
+    leave();
     const layers = findGradients(pick.computed);
     const layer = clamp(pick.layer ?? 0, 0, layers.length - 1);
     const existing = pick.el.getAttribute('data-gradier-target');
@@ -913,6 +973,8 @@ export function createCssEditor(ctx: CssEditorContext) {
       computed = getComputedStyle(pick.el, pick.pseudo || null).backgroundImage;
     }
     target = { el: pick.el, pseudo: pick.pseudo, id, computed, layer, layerCount: layers.length };
+    if (!pending) latest.delete(keyOf(target));
+    saveError = false;
     computedStops = parseGradient(findGradients(computed)[layer]?.text ?? '')?.stops.map((s) => s.color) ?? [];
     rebase(findGradients(computed)[layer]?.text ?? '');
     matches = [];
@@ -923,11 +985,20 @@ export function createCssEditor(ctx: CssEditorContext) {
     void search();
   };
 
-  /** Close the current edit. Returns false if the user cancelled because of unsaved changes. */
-  const close = (force = false) => {
+  /**
+   * Finish with the current gradient: write any pending change to source now. If it isn't in source, the edit stays
+   * applied to the page for this session (copy it from the panel to keep it).
+   */
+  const leave = () => {
+    if (!target) return;
+    if (isDirty() && source) save();
+    else if (!isDirty() && !pending && !settling.has(target.id)) dropPreview(target);
+  };
+
+  /** Close the current edit (saving first). Always succeeds; kept boolean for callers. */
+  const close = () => {
     if (!target) return true;
-    if (!force && isDirty() && !confirm('Discard unsaved gradient changes?')) return false;
-    if (isDirty()) dropPreview(target);
+    leave();
     target = null;
     model = null;
     clearStage();
@@ -953,6 +1024,17 @@ export function createCssEditor(ctx: CssEditorContext) {
       return selected;
     },
     removeSelectedStop: () => selected !== null && removeStop(selected),
+    /** Write pending changes now (Ctrl/⌘+S, leaving the page). */
+    flush: () => save(),
+    get targetEl() {
+      return target?.el ?? null;
+    },
+    /** Draw the gradient in `el` (the expanded view) and put the handles there; null puts them back on the page. */
+    setExpandEl: (el: HTMLElement | null) => {
+      expandEl = el;
+      if (el && model) el.style.background = serialize(model);
+    },
+
     deselect: () => {
       if (selected === null) return false;
       selected = null;
@@ -960,7 +1042,7 @@ export function createCssEditor(ctx: CssEditorContext) {
       return true;
     },
     structureKey: () =>
-      [target?.id, target?.layer, model?.fn, model?.stops.length, model?.cfg.positionRaw, searching, saving, source?.file, source?.start, matches.length, applyAll].join('|'),
+      [target?.id, target?.layer, model?.fn, model?.stops.length, model?.cfg.positionRaw, searching, source?.file, source?.start, matches.length, applyAll].join('|'),
   };
 }
 
