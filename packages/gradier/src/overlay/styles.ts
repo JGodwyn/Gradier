@@ -59,7 +59,9 @@ button { cursor: pointer; }
 .head .logo { width: 16px; height: 16px; margin-right: 4px; }
 .head .title { font-weight: 650; flex: 1; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .head-sep { width: 1px; height: 18px; margin: 0 4px; background: var(--line-strong); }
-.body { overflow-y: auto; padding: 4px 16px 20px; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; scrollbar-width: thin; scrollbar-color: #444 transparent; }
+/* Scrolls, but without a visible scrollbar. */
+.body { overflow-y: auto; padding: 4px 16px 20px; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; scrollbar-width: none; }
+.body::-webkit-scrollbar { display: none; }
 .foot { border-top: 1px solid var(--line); padding: 10px 16px; display: flex; align-items: center; gap: 8px; flex: none; }
 .foot .status { flex: 1; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .foot .status.dirty { color: var(--warn); }

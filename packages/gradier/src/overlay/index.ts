@@ -269,7 +269,7 @@ function boot() {
   /** Enter pick mode: the next click on the page chooses which gradient to edit. */
   const pick = () => {
     if (cancelPick) return;
-    if (!state.open) setOpen(true);
+    const opening = !state.open;
     state.expanded = false;
     cancelPick = startPicker(stage, host, (result) => {
       cancelPick = null;
@@ -285,7 +285,10 @@ function boot() {
       state.mode = 'css';
       css.open(result);
     });
-    render();
+    // Open (animated, like Alt+G) only after pick mode is on, so the panel is built once and its slide-in isn't
+    // cut short by a rebuild.
+    if (opening) setOpen(true, true);
+    else render();
   };
 
   /** `<gradier-gradient>` elements on the page (not the expanded view's own copy, which lives in our shadow root). */
@@ -859,8 +862,10 @@ function boot() {
     const onPage = new Set(namedElements().map((el) => el.getAttribute('name')));
     const sep = () => h('span', { className: 'head-sep' });
 
-    refs.undo = button('icon ghost', ICONS.undo, `Undo (${MOD}Z)`, () => (state.mode === 'css' ? css.undo(false) : undo()));
-    refs.redo = button('icon ghost', ICONS.redo, `Redo (${MOD}Shift+Z)`, () => (state.mode === 'css' ? css.undo(true) : undo(true)));
+    // The CSS editor builds its own body and undo/redo (they track its own history).
+    const cssParts = state.mode === 'css' ? css.build() : null;
+    refs.undo = cssParts ? cssParts.undo : button('icon ghost', ICONS.undo, `Undo (${MOD}Z)`, () => undo());
+    refs.redo = cssParts ? cssParts.redo : button('icon ghost', ICONS.redo, `Redo (${MOD}Shift+Z)`, () => undo(true));
     const head = h(
       'div',
       { className: 'head' },
@@ -869,8 +874,10 @@ function boot() {
             if (css.close()) state.mode = 'mesh';
             render();
           })
-        : h('span', { className: 'logo' }),
-      h('span', { className: 'title' }, state.mode === 'css' ? 'CSS gradient' : 'Gradier'),
+        : null,
+      refs.undo ?? null,
+      refs.redo ?? null,
+      h('span', { className: 'grow' }),
       button(`icon ghost${cancelPick ? ' on' : ''}`, ICONS.pick, 'Pick any gradient on the page (Alt+P)', pick),
       canExpand(g)
         ? button(
@@ -904,8 +911,7 @@ function boot() {
     const panelClass = `panel${state.dock === 'left' ? ' left' : ''}`;
 
     if (state.mode === 'css') {
-      const { body, foot } = css.build();
-      return h('div', { className: panelClass }, head, body, foot);
+      return h('div', { className: panelClass }, head, cssParts!.body);
     }
 
     const body = h('div', { className: 'body' });
@@ -1122,10 +1128,7 @@ function boot() {
       );
     }
 
-    refs.status = h('span', { className: 'status' });
-    const foot = h('div', { className: 'foot' }, refs.undo!, refs.redo!, refs.status);
-
-    return h('div', { className: panelClass }, head, body, foot);
+    return h('div', { className: panelClass }, head, body);
   };
 
   /** Update values in place (keeps focus and slider drags working). */

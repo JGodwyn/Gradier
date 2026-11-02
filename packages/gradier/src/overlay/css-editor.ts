@@ -496,7 +496,7 @@ export function createCssEditor(ctx: CssEditorContext) {
     const body = h('div', { className: 'body' });
     if (!target || !model) {
       body.append(h('div', { className: 'hint' }, 'Pick a gradient on the page to edit it.'), btn('Pick a gradient', ctx.pick, 'primary'));
-      return { body, foot: h('div', { className: 'foot' }) };
+      return { body };
     }
     const t = target;
     const m = model;
@@ -771,11 +771,10 @@ export function createCssEditor(ctx: CssEditorContext) {
       ),
     );
 
+    // Undo/redo live in the panel header; the host places these buttons there.
     refs.undo = ctx.button('icon ghost', ICONS.undo, 'Undo', () => undo());
     refs.redo = ctx.button('icon ghost', ICONS.redo, 'Redo', () => undo(true));
-    refs.status = h('span', { className: 'status' });
-    const foot = h('div', { className: 'foot' }, refs.undo, refs.redo, refs.status);
-    return { body, foot };
+    return { body, undo: refs.undo as HTMLButtonElement, redo: refs.redo as HTMLButtonElement };
   };
 
   const setRange = (name: string, value: number, label: string) => {
