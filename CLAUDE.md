@@ -32,4 +32,5 @@ No pull request is needed unless the owner asks for one.
 - Motion follows Emil Kowalski's animation skills, installed in `.claude/skills/` (MIT). Use `animate` when adding
   motion and `review-animations` before shipping it. In short: strong ease-out curves (tokens on `.root`), UI motion
   under 300ms, `transform`/`opacity` only (measured height for collapsing blocks), no animation on keyboard-triggered
-  actions, and a reduced-motion variant that keeps fades but drops movement.
+  actions except opening/closing the panel and the expanded view (Alt+G, F, Esc animate like their buttons, as the
+  owner asked), and a reduced-motion variant that keeps fades but drops movement.

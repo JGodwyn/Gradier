@@ -124,6 +124,7 @@ function boot() {
     tool: 'select' as Tool,
     handlesHidden: false,
     expanded: false,
+    quietHtml: false,
     exportScale: clamp(Number(storage('gradier:exportScale')) || 2, 1, 4),
   };
   let cancelPick: (() => void) | null = null;
@@ -207,6 +208,7 @@ function boot() {
     convert: (from) => void convertToMesh(from),
     library: () => library,
     swatch: (g) => gradientToCSS(g),
+    quietHtml: () => state.quietHtml,
   });
 
   /**
@@ -219,6 +221,7 @@ function boot() {
     const points = from ? null : css.meshSeed();
     if (!from && !points) return toast("Couldn't read this gradient's colours", true);
     const at = css.sourceMatch;
+    const replaces = css.pseudo || undefined;
     const base =
       (el.id || [...el.classList].find((c) => !c.startsWith('gradier')) || el.tagName.toLowerCase())
         .replace(/[^\w-]+/g, '-')
@@ -236,6 +239,7 @@ function boot() {
     state.target = null;
     state.expanded = false;
     el.setAttribute(LAYER_ATTR, name);
+    if (replaces) el.setAttribute(`${LAYER_ATTR}-replaces`, replaces);
     render();
     if (!state.connected) return toast(`"${name}" is a mesh gradient on this page. Add data-gradier="${name}" to the element to keep it.`, true);
     // Write the gradient first: changing the markup may reload the page.
@@ -249,7 +253,7 @@ function boot() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name,
-          element: { tag: el.tagName.toLowerCase(), id: el.id, classes: [...el.classList], text: (el.textContent ?? '').trim().slice(0, 80), at },
+          element: { tag: el.tagName.toLowerCase(), id: el.id, classes: [...el.classList], text: (el.textContent ?? '').trim().slice(0, 80), at, replaces },
         }),
       });
       const data = (await res.json()) as { file?: string; line?: number; error?: string };
@@ -302,6 +306,17 @@ function boot() {
   const ensureSelection = () => {
     const names = Object.keys(getGradients());
     if (state.selected && names.includes(state.selected)) return;
+    // After a reload, come back to the gradient you were editing.
+    let last: string | null = null;
+    try {
+      last = sessionStorage.getItem('gradier:selected');
+    } catch {}
+    if (last && names.includes(last)) {
+      state.selected = last;
+      state.target = namedElements().find((el) => el.getAttribute('name') === last) ?? null;
+      state.point = null;
+      return;
+    }
     const onPage = namedElements().find((el) => names.includes(el.getAttribute('name')!));
     state.selected = onPage?.getAttribute('name') ?? names[0] ?? null;
     state.target = onPage ?? null;
@@ -350,8 +365,9 @@ function boot() {
     try {
       const res = await fetch(API, { cache: 'no-store' });
       if (!res.ok) throw new Error(`${res.status}`);
-      const data = (await res.json()) as { file: string; gradients: Record<string, Gradient> };
+      const data = (await res.json()) as { file: string; gradients: Record<string, Gradient>; quietHtml?: boolean };
       state.file = data.file;
+      state.quietHtml = !!data.quietHtml;
       state.saved = Object.fromEntries(Object.entries(data.gradients).map(([n, g]) => [n, canon(g)]));
       const current = getGradients();
       const missing = Object.fromEntries(Object.entries(data.gradients).filter(([n]) => !(n in current)));
@@ -1173,6 +1189,9 @@ function boot() {
     launcher = null;
     if (state.mode === 'css' && !css.active) state.mode = 'mesh';
     ensureSelection();
+    try {
+      if (state.selected) sessionStorage.setItem('gradier:selected', state.selected);
+    } catch {}
     const g = state.selected ? getGradient(state.selected) : undefined;
     const key = [
       state.mode,
@@ -1287,7 +1306,7 @@ function boot() {
   /** Fit the expanded box into the space beside the panel and above the toolbar. */
   const layoutExpand = () => {
     if (!expandBox) return;
-    const panelW = panel?.offsetWidth ?? 0;
+    const panelW = panel ? panel.offsetWidth + 12 : 0;
     const margin = innerWidth < 700 ? 16 : 48;
     const top = 56;
     const bottom = 96;
@@ -1798,7 +1817,7 @@ function boot() {
     (e) => {
       if (e.altKey && e.code === 'KeyG') {
         e.preventDefault();
-        return setOpen(!state.open);
+        return setOpen(!state.open, true);
       }
       if (e.altKey && e.code === 'KeyP') {
         e.preventDefault();
@@ -1811,12 +1830,12 @@ function boot() {
         const g = state.selected ? getGradient(state.selected) : undefined;
         if (state.expanded || canExpand(g)) {
           e.preventDefault();
-          return setExpanded(!state.expanded);
+          return setExpanded(!state.expanded, true);
         }
       }
       if (e.key === 'Escape' && state.expanded && !isTextField(target)) {
         e.preventDefault();
-        return setExpanded(false);
+        return setExpanded(false, true);
       }
       if (state.mode === 'css') {
         if (mod && e.key.toLowerCase() === 's') {
@@ -1829,7 +1848,7 @@ function boot() {
           e.preventDefault();
           css.removeSelectedStop();
         } else if (e.key === 'Escape' && !isTextField(target)) {
-          if (!css.deselect()) setOpen(false);
+          if (!css.deselect()) setOpen(false, true);
         }
         return;
       }
@@ -1853,7 +1872,7 @@ function boot() {
         else if (state.point !== null) {
           state.point = null;
           render();
-        } else setOpen(false);
+        } else setOpen(false, true);
       }
     },
     true,

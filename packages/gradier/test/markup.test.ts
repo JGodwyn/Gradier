@@ -35,3 +35,9 @@ test('breaks ties by text, refuses when still ambiguous, replaces an existing va
   assert.match(readFileSync(path.join(root, 'index.html'), 'utf8'), /<p data-gradier="again" class="t">Two/);
   await assert.rejects(addLayerAttribute(root, { tag: 'p', classes: ['t'] }, 'x'), /2 matching/);
 });
+
+test('marks a replaced pseudo-element', async () => {
+  const root = project({ 'index.html': '<div class="glow"><span>x</span></div>' });
+  await addLayerAttribute(root, { tag: 'div', classes: ['glow'], replaces: 'before' }, 'glow');
+  assert.equal(readFileSync(path.join(root, 'index.html'), 'utf8'), '<div data-gradier="glow" data-gradier-replaces="before" class="glow"><span>x</span></div>');
+});
