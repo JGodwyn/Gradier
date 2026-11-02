@@ -179,13 +179,14 @@ input[type=range] { accent-color: #fff; }
 .cf-opacity { display: flex; align-items: center; gap: 5px; width: 76px; flex: none; padding: 0 8px; cursor: text; }
 .cf-icon { display: grid; place-items: center; flex: none; color: #d4d4d4; cursor: ew-resize; touch-action: none; }
 .cf-icon svg { width: 15px; height: 15px; }
-.cf-alpha { flex: 1; width: 0; }
+/* Always room for three digits ("100"), so the value is never clipped. */
+.cf-alpha { flex: 1; width: 0; min-width: 3ch; }
 .cf-unit { color: var(--muted); font-size: 12px; }
 /* CSS stops also have a position box, so their colour fields are a little tighter. */
 .section.flat .point { gap: 4px; }
 .section.flat .point .text.pos { width: 46px; height: 34px; padding: 0 6px; }
 .section.flat .cf { gap: 4px; }
-.section.flat .cf-opacity { width: 64px; padding: 0 6px; gap: 4px; }
+.section.flat .cf-opacity { width: 72px; padding: 0 6px; gap: 4px; }
 .section.flat .cf-swatch { width: 30px; }
 .section.flat .cf-hex { padding: 0 8px; }
 
